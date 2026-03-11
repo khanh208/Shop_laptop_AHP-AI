@@ -1,0 +1,36 @@
+Đặt tên Database là :"T2C1" hoặc tên khác thì phải sửa lại trong file ".env" 
+và đổi mật khẩu của postgre lại
+Cách chạy chương trình:
+Bước 1: Cài môi trường
+Vào terminal của thư mục laptop_be : đường dẫn là D:\DAGK\AHP\T2CA1\laptop_be>
+sau đó chạy lệnh python -m venv .env
+Tải thư viện chạy lệnh: pip install -r requirements.txt
+Bước 2: python run.py 
+sau đó dùng postman để import dataset vào cơ sở dữ liệu: 
+Post: http://127.0.0.1:5000/api/admin/imports/laptop-data
+Vào tab Body → chọn form-data
+Tạo các field:
+file → kiểu File → chọn file AHP_Laptop_Nhom8.xlsx
+sheetName → Laptop_Data
+replaceStaging → true
+autoCommit → false
+
+Post: http://127.0.0.1:5000/api/admin/imports/laptop-data/commit
+không có body nhấn send là được 
+nếu bị lỗi thì thử dán đoạn code sau vào Postgre rồi chạy lại 
+
+WITH ranked AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                COALESCE(NULLIF(TRIM(laptop_name), ''), 'Unknown Laptop'),
+                COALESCE(NULLIF(TRIM(model_code), ''), '')
+            ORDER BY id
+        ) AS rn
+    FROM stg_laptop_data
+)
+DELETE FROM stg_laptop_data s
+USING ranked r
+WHERE s.id = r.id
+  AND r.rn > 1;

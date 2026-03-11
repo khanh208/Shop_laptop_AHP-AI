@@ -1,0 +1,56 @@
+Train AI/
+│
+├── AHP_Laptop_Nhom8.xlsx
+├── train_model.py
+├── train_model.ipynb
+├── rf_ahp_model.pkl
+
+
+1/ cài các thư viện trước, mở terminal Train AI
+pip install pandas numpy scikit-learn openpyxl joblib matplotlib
+pip install scikit-learn==1.3.0
+
+2/ chạy file train 
+python train_model.py
+
+3/ Kết quả hiển thị sẽ gồm:
+R² Score
+MAE
+RMSE
+Feature Importance
+Thông báo: Model saved successfully!
+
+4/ TRAIN THÊM AI VỀ BƯỚC 4,5 
+cài thư viện: pip install pandas scikit-learn joblib numpy
+Chạy chương trình: python train_multi_model.py (cd vô Train AI nha)
+Chạy chương trình này xong sẽ tạo file .pkl trong mục models (đã có sẵn là Performance_model.pkl, Portability_model.pkl)
+
+Kết quả đúng có đc trong terminal:
+
+Training: Performance
+R2: 0.894
+MAE: 0.0189
+Saved: models/Performance_model.pkl
+----------------------
+Training: Portability
+R2: 0.9944
+MAE: 0.002
+Saved: models/Portability_model.pkl
+----------------------
+
+Models training completed!
+
+=== TEST HYBRID PIPELINE ===
+
+Top 5 laptop recommendations:
+
+      Performance_AI  Portability_AI  Battery_AI  Durability_AI  MatchScore
+403         0.917399        0.233595    0.571429       0.690476    0.654562
+142         0.919667        0.222897    0.571429       0.690476    0.652908
+1185        0.907613        0.234406    0.571429       0.690476    0.650361
+854         0.901827        0.209789    0.571429       0.690476    0.641603
+235         0.831024        0.227731    0.571429       0.690476    0.614227
+
+Hybrid DSS training + test completed successfully!
+
+Nếu lỗi liên hệ Trúc

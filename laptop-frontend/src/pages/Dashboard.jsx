@@ -29,8 +29,29 @@ export default function Dashboard() {
   );
 
   // Chỉ lấy đúng dữ liệu từ backend, nếu không có thì để mảng rỗng để không bị crash
-  const matrixLabels = data.ahp?.matrixLabels || [];
-  const criteriaMatrix = data.ahp?.criteriaMatrix || [];
+  // 1. Lấy danh sách tên Tiêu chí và Mã tiêu chí (để làm cột và hàng)
+  const matrixLabels = data.ahp?.weights?.map(w => w.name) || [];
+  const criteriaCodes = data.ahp?.weights?.map(w => w.criterion) || [];
+
+  // 2. Chuyển đổi pairwiseMatrix từ Backend (Mảng 1 chiều) thành criteriaMatrix (Mảng 2 chiều)
+  const flatMatrix = data.ahp?.pairwiseMatrix || [];
+  const criteriaMatrix = [];
+
+  if (flatMatrix.length > 0 && criteriaCodes.length > 0) {
+    // Vòng lặp tạo 8 hàng
+    for (let i = 0; i < criteriaCodes.length; i++) {
+      const rowArray = [];
+      // Vòng lặp tạo 8 cột trong mỗi hàng
+      for (let j = 0; j < criteriaCodes.length; j++) {
+        // Tìm giá trị giao nhau giữa Hàng i và Cột j
+        const cell = flatMatrix.find(
+          c => c.row === criteriaCodes[i] && c.col === criteriaCodes[j]
+        );
+        rowArray.push(cell ? cell.value : 0);
+      }
+      criteriaMatrix.push(rowArray);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#06080a] text-white p-6 md:p-10 font-sans relative">

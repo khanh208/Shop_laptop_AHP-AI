@@ -21,6 +21,36 @@ CRITERION_TO_FEATURE = {
     "upgradeability": "norm_upgradeability",
 }
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+DEFAULT_MODEL_PATHS = {
+    "performance": "Train AI/models/Performance_model.pkl",
+    "portability": "Train AI/models/Portability_model.pkl",
+}
+
+CRITERION_TO_MODEL_GROUP = {
+    "cpu": "performance",
+    "ram": "performance",
+    "gpu": "performance",
+    "screen": "portability",
+    "weight": "portability",
+    "battery": None,
+    "durability": None,
+    "upgradeability": None,
+}
+
+MODEL_INPUT_COLUMNS_7 = [
+    "Norm_CPU",
+    "Norm_RAM",
+    "Norm_GPU",
+    "Norm_Screen",
+    "Norm_Weight",
+    "Norm_Battery",
+    "Norm_Durability",
+]
+
+_MODEL_CACHE = {}
+
 
 def _float_or_none(value):
     if value is None:
@@ -36,6 +66,90 @@ def _fetch_one(conn, sql, params=None):
 
 def _fetch_all(conn, sql, params=None):
     return conn.execute(text(sql), params or {}).mappings().all()
+
+
+def _clamp_score_100(value):
+    value = float(value or 0)
+    if value < 0:
+        return 0.0
+    if value > 100:
+        return 100.0
+    return value
+
+
+def _normalize_prediction_to_score_100(raw_value):
+    raw_value = float(raw_value or 0)
+
+    if 0.0 <= raw_value <= 1.0:
+        return _clamp_score_100(raw_value * 100.0)
+
+    if 0.0 <= raw_value <= 10.0:
+        return _clamp_score_100(raw_value * 10.0)
+
+    return _clamp_score_100(raw_value)
+
+
+def _resolve_model_path(relative_path):
+    return (BASE_DIR / relative_path).resolve()
+
+
+def _load_model(relative_path):
+    full_path = str(_resolve_model_path(relative_path))
+    if full_path not in _MODEL_CACHE:
+        _MODEL_CACHE[full_path] = joblib.load(full_path)
+    return _MODEL_CACHE[full_path]
+
+
+def _get_model_artifact_for_criterion(conn, criterion_id, criterion_code):
+    row = _fetch_one(conn, """
+        SELECT id, artifact_path
+        FROM ml_models
+        WHERE is_active = TRUE
+          AND (criterion_id = :criterion_id OR criterion_id IS NULL)
+        ORDER BY
+            CASE WHEN criterion_id = :criterion_id THEN 0 ELSE 1 END,
+            created_at DESC
+        LIMIT 1
+    """, {
+        "criterion_id": criterion_id,
+    })
+
+    if row and row["artifact_path"]:
+        return row["id"], row["artifact_path"]
+
+    model_group = CRITERION_TO_MODEL_GROUP.get(criterion_code)
+    if not model_group:
+        return None, None
+
+    return None, DEFAULT_MODEL_PATHS.get(model_group)
+
+
+def _predict_model_score(model, feature_map):
+    df7 = pd.DataFrame([{
+        "Norm_CPU": feature_map["Norm_CPU"],
+        "Norm_RAM": feature_map["Norm_RAM"],
+        "Norm_GPU": feature_map["Norm_GPU"],
+        "Norm_Screen": feature_map["Norm_Screen"],
+        "Norm_Weight": feature_map["Norm_Weight"],
+        "Norm_Battery": feature_map["Norm_Battery"],
+        "Norm_Durability": feature_map["Norm_Durability"],
+    }])
+
+    arr7 = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS_7]], dtype=float)
+
+    attempts = [df7, arr7]
+    last_error = None
+
+    for X in attempts:
+        try:
+            pred = model.predict(X)
+            raw_prediction = float(pred[0])
+            score_100 = _normalize_prediction_to_score_100(raw_prediction)
+            return raw_prediction, score_100
+        except Exception as e:
+            last_error = e
+
+    raise last_error
 
 
 def get_form_options(conn):
@@ -130,36 +244,36 @@ def create_session_and_filters(conn, payload, user_id=None):
             raise ValueError("gpuCode không hợp lệ")
 
     session_row = _fetch_one(conn, """
-    INSERT INTO evaluation_sessions (
-        user_id,
-        usage_profile_id,
-        mode,
-        request_payload,
-        top_n,
-        status,
-        budget_min,
-        budget_max
-    )
-    VALUES (
-        :user_id,
-        :usage_profile_id,
-        :mode,
-        CAST(:request_payload AS JSONB),
-        :top_n,
-        'created',
-        :budget_min,
-        :budget_max
-    )
-    RETURNING id, session_key
-""", {
-    "user_id": user_id,
-    "usage_profile_id": usage_profile["id"],
-    "mode": payload.get("mode", "advanced"),
-    "request_payload": json.dumps(payload),
-    "top_n": top_n,
-    "budget_min": budget.get("min"),
-    "budget_max": budget.get("max"),
-})
+        INSERT INTO evaluation_sessions (
+            user_id,
+            usage_profile_id,
+            mode,
+            request_payload,
+            top_n,
+            status,
+            budget_min,
+            budget_max
+        )
+        VALUES (
+            :user_id,
+            :usage_profile_id,
+            :mode,
+            CAST(:request_payload AS JSONB),
+            :top_n,
+            'created',
+            :budget_min,
+            :budget_max
+        )
+        RETURNING id, session_key
+    """, {
+        "user_id": user_id,
+        "usage_profile_id": usage_profile["id"],
+        "mode": payload.get("mode", "advanced"),
+        "request_payload": json.dumps(payload),
+        "top_n": top_n,
+        "budget_min": budget.get("min"),
+        "budget_max": budget.get("max"),
+    })
 
     conn.execute(text("""
         INSERT INTO evaluation_filters (
@@ -264,29 +378,17 @@ def run_hard_filter(conn, session_id):
             failed_rules.append("min_ram_gb")
         if filt["min_ssd_gb"] and laptop["ssd_gb"] < filt["min_ssd_gb"]:
             failed_rules.append("min_ssd_gb")
-        if filt["min_cpu_benchmark_score"] and (
-            (laptop["cpu_benchmark_score"] or 0) < filt["min_cpu_benchmark_score"]
-        ):
+        if filt["min_cpu_benchmark_score"] and ((laptop["cpu_benchmark_score"] or 0) < filt["min_cpu_benchmark_score"]):
             failed_rules.append("min_cpu_benchmark_score")
-        if filt["min_gpu_benchmark_score"] and (
-            (laptop["gpu_benchmark_score"] or 0) < filt["min_gpu_benchmark_score"]
-        ):
+        if filt["min_gpu_benchmark_score"] and ((laptop["gpu_benchmark_score"] or 0) < filt["min_gpu_benchmark_score"]):
             failed_rules.append("min_gpu_benchmark_score")
-        if filt["min_screen_size_inch"] and (
-            (laptop["screen_size_inch"] or 0) < filt["min_screen_size_inch"]
-        ):
+        if filt["min_screen_size_inch"] and ((laptop["screen_size_inch"] or 0) < filt["min_screen_size_inch"]):
             failed_rules.append("min_screen_size_inch")
-        if filt["max_screen_size_inch"] and (
-            (laptop["screen_size_inch"] or 999) > filt["max_screen_size_inch"]
-        ):
+        if filt["max_screen_size_inch"] and ((laptop["screen_size_inch"] or 999) > filt["max_screen_size_inch"]):
             failed_rules.append("max_screen_size_inch")
-        if filt["max_weight_kg"] and (
-            (laptop["weight_kg"] or 999) > filt["max_weight_kg"]
-        ):
+        if filt["max_weight_kg"] and ((laptop["weight_kg"] or 999) > filt["max_weight_kg"]):
             failed_rules.append("max_weight_kg")
-        if filt["min_battery_hours"] and (
-            (laptop["battery_hours"] or 0) < filt["min_battery_hours"]
-        ):
+        if filt["min_battery_hours"] and ((laptop["battery_hours"] or 0) < filt["min_battery_hours"]):
             failed_rules.append("min_battery_hours")
         if filt["require_in_stock"] and (laptop["stock_quantity"] or 0) <= 0:
             failed_rules.append("stock_quantity")
@@ -502,8 +604,6 @@ def calculate_and_store_ahp(conn, session_id):
 
     for i, row_i in enumerate(rows):
         for j, row_j in enumerate(rows):
-            # Schema cấm lưu (criterion_1_id = criterion_2_id) ở evaluation_pairwise_matrix.
-            # Đường chéo vẫn được lưu đầy đủ ở evaluation_ahp_matrix_cells để FE hiển thị full matrix.
             if i != j:
                 conn.execute(text("""
                     INSERT INTO evaluation_pairwise_matrix (
@@ -617,6 +717,7 @@ def calculate_and_store_ahp(conn, session_id):
         ],
     }
 
+
 def ai_score_candidates(conn, session_id):
     conn.execute(text("""
         DELETE FROM evaluation_ai_scores
@@ -659,11 +760,21 @@ def ai_score_candidates(conn, session_id):
         for criterion in criteria:
             criterion_code = criterion["code"]
 
-            # fallback mặc định nếu model không chạy được
-            if criterion_code == "upgradeability":
+            if criterion_code == "battery":
+                raw_prediction = feature_map["Norm_Battery"]
+                score_100 = _clamp_score_100(raw_prediction * 100.0)
+                model_id = None
+
+            elif criterion_code == "durability":
+                raw_prediction = feature_map["Norm_Durability"]
+                score_100 = _clamp_score_100(raw_prediction * 100.0)
+                model_id = None
+
+            elif criterion_code == "upgradeability":
                 raw_prediction = feature_map["Norm_Upgrade"]
                 score_100 = _clamp_score_100(raw_prediction * 100.0)
                 model_id = None
+
             else:
                 feature_name = CRITERION_TO_FEATURE[criterion_code]
                 fallback_raw = float(c[feature_name] or 0)
@@ -683,7 +794,6 @@ def ai_score_candidates(conn, session_id):
                         model = _load_model(artifact_path)
                         raw_prediction, score_100 = _predict_model_score(model, feature_map)
                     except Exception:
-                        # nếu load/predict lỗi thì quay về fallback từ norm_*
                         raw_prediction = fallback_raw
                         score_100 = fallback_score_100
 
@@ -712,6 +822,7 @@ def ai_score_candidates(conn, session_id):
         SET status = 'scored'
         WHERE id = :sid
     """), {"sid": session_id})
+
 
 def rank_candidates(conn, session_id):
     top_n_row = _fetch_one(conn, """
@@ -1083,6 +1194,7 @@ def run_full_pipeline(conn, payload, user_id=None):
     dashboard["session"]["hardFilterPassCount"] = hard_filter["passed"]
     return dashboard
 
+
 def _get_session_by_key(conn, session_key):
     return _fetch_one(conn, """
         SELECT
@@ -1118,30 +1230,30 @@ def create_session_only(conn, payload, user_id=None):
         raise ValueError("usageProfile không hợp lệ")
 
     session_row = _fetch_one(conn, """
-    INSERT INTO evaluation_sessions (
-        user_id,
-        usage_profile_id,
-        mode,
-        request_payload,
-        top_n,
-        status
-    )
-    VALUES (
-        :user_id,
-        :usage_profile_id,
-        :mode,
-        CAST(:request_payload AS JSONB),
-        :top_n,
-        'created'
-    )
-    RETURNING id, session_key
-""", {
-    "user_id": user_id,
-    "usage_profile_id": usage_profile["id"],
-    "mode": mode,
-    "request_payload": json.dumps(payload),
-    "top_n": top_n,
-})
+        INSERT INTO evaluation_sessions (
+            user_id,
+            usage_profile_id,
+            mode,
+            request_payload,
+            top_n,
+            status
+        )
+        VALUES (
+            :user_id,
+            :usage_profile_id,
+            :mode,
+            CAST(:request_payload AS JSONB),
+            :top_n,
+            'created'
+        )
+        RETURNING id, session_key
+    """, {
+        "user_id": user_id,
+        "usage_profile_id": usage_profile["id"],
+        "mode": mode,
+        "request_payload": json.dumps(payload),
+        "top_n": top_n,
+    })
 
     return {
         "sessionId": session_row["id"],
@@ -1527,6 +1639,8 @@ def get_inference_trace_by_session_key(conn, session_key):
             for x in rows
         ],
     }
+
+
 def run_hard_filter_by_session_key(conn, session_key):
     session_row = _get_session_by_key(conn, session_key)
     if not session_row:
@@ -1695,6 +1809,7 @@ def get_weights_by_session_key(conn, session_key):
             for r in rows
         ],
     }
+
 
 def ai_score_by_session_key(conn, session_key):
     session_row = _get_session_by_key(conn, session_key)
@@ -1935,6 +2050,7 @@ def generate_reasons_by_session_key(conn, session_key):
         "reasonCount": int(reason_count["cnt"] or 0),
     }
 
+
 def get_reasons_by_session_key(conn, session_key):
     session_row = _get_session_by_key(conn, session_key)
     if not session_row:
@@ -1991,142 +2107,3 @@ def get_reasons_by_session_key(conn, session_key):
             for rank in sorted(laptop_info.keys())
         ],
     }
-
-
-BASE_DIR = Path(__file__).resolve().parents[2]
-
-DEFAULT_MODEL_PATHS = {
-    "performance": "Train AI/models/Performance_model.pkl",
-    "portability": "Train AI/models/Portability_model.pkl",
-    "battery": "Train AI/models/BatteryScore_model.pkl",
-    "durability": "Train AI/models/DurabilityScore_model.pkl",
-}
-
-CRITERION_TO_MODEL_GROUP = {
-    "cpu": "performance",
-    "ram": "performance",
-    "gpu": "performance",
-    "screen": "portability",
-    "weight": "portability",
-    "battery": "battery",
-    "durability": "durability",
-    "upgradeability": None,
-}
-
-MODEL_INPUT_COLUMNS_8 = [
-    "Norm_CPU",
-    "Norm_RAM",
-    "Norm_GPU",
-    "Norm_Screen",
-    "Norm_Weight",
-    "Norm_Battery",
-    "Norm_Durability",
-    "Norm_Upgrade",
-]
-
-MODEL_INPUT_COLUMNS_9 = [
-    "Norm_CPU",
-    "Norm_RAM",
-    "Norm_GPU",
-    "Norm_Screen",
-    "Norm_Weight",
-    "Norm_Battery",
-    "Norm_Durability",
-    "Norm_Upgrade",
-    "Price (VND)",
-]
-
-_MODEL_CACHE = {}
-
-def _clamp_score_100(value):
-    value = float(value or 0)
-    if value < 0:
-        return 0.0
-    if value > 100:
-        return 100.0
-    return value
-
-
-def _normalize_prediction_to_score_100(raw_value):
-    raw_value = float(raw_value or 0)
-
-    # Nếu model trả 0..1
-    if 0.0 <= raw_value <= 1.0:
-        return _clamp_score_100(raw_value * 100.0)
-
-    # Nếu model trả 1..10
-    if 0.0 <= raw_value <= 10.0:
-        return _clamp_score_100(raw_value * 10.0)
-
-    # Nếu model đã trả 0..100
-    return _clamp_score_100(raw_value)
-
-
-def _resolve_model_path(relative_path):
-    return (BASE_DIR / relative_path).resolve()
-
-
-def _load_model(relative_path):
-    full_path = str(_resolve_model_path(relative_path))
-    if full_path not in _MODEL_CACHE:
-        _MODEL_CACHE[full_path] = joblib.load(full_path)
-    return _MODEL_CACHE[full_path]
-
-
-def _get_model_artifact_for_criterion(conn, criterion_id, criterion_code):
-    # Nếu DB có model active thì ưu tiên dùng model đó
-    row = _fetch_one(conn, """
-        SELECT id, artifact_path
-        FROM ml_models
-        WHERE is_active = TRUE
-          AND (criterion_id = :criterion_id OR criterion_id IS NULL)
-        ORDER BY
-            CASE WHEN criterion_id = :criterion_id THEN 0 ELSE 1 END,
-            created_at DESC
-        LIMIT 1
-    """, {
-        "criterion_id": criterion_id
-    })
-
-    if row and row["artifact_path"]:
-        return row["id"], row["artifact_path"]
-
-    # Nếu DB chưa lưu gì thì fallback sang file hard-code
-    model_group = CRITERION_TO_MODEL_GROUP.get(criterion_code)
-    if not model_group:
-        return None, None
-
-    return None, DEFAULT_MODEL_PATHS.get(model_group)
-
-
-def _predict_model_score(model, feature_map):
-    df9 = pd.DataFrame([{
-        "Norm_CPU": feature_map["Norm_CPU"],
-        "Norm_RAM": feature_map["Norm_RAM"],
-        "Norm_GPU": feature_map["Norm_GPU"],
-        "Norm_Screen": feature_map["Norm_Screen"],
-        "Norm_Weight": feature_map["Norm_Weight"],
-        "Norm_Battery": feature_map["Norm_Battery"],
-        "Norm_Durability": feature_map["Norm_Durability"],
-        "Norm_Upgrade": feature_map["Norm_Upgrade"],
-        "Price (VND)": feature_map["Price (VND)"],
-    }])
-
-    df8 = df9[MODEL_INPUT_COLUMNS_8]
-
-    arr9 = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS_9]], dtype=float)
-    arr8 = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS_8]], dtype=float)
-
-    attempts = [df9, df8, arr9, arr8]
-    last_error = None
-
-    for X in attempts:
-        try:
-            pred = model.predict(X)
-            raw_prediction = float(pred[0])
-            score_100 = _normalize_prediction_to_score_100(raw_prediction)
-            return raw_prediction, score_100
-        except Exception as e:
-            last_error = e
-
-    raise last_error

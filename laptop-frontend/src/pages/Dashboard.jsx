@@ -1,287 +1,524 @@
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { getDashboard, getInferenceTrace, getCandidates } from '../services/api';
-import { Activity, Filter, Cpu, CheckCircle, X, ChevronRight, Zap, Bot, Info } from 'lucide-react';
+import {
+  Activity,
+  Filter,
+  Cpu,
+  CheckCircle,
+  X,
+  ChevronRight,
+  Zap,
+  Bot,
+  Info,
+  Maximize2
+} from 'lucide-react';
 
 export default function Dashboard() {
   const { sessionKey } = useParams();
+  const navigate = useNavigate();
+
   const [data, setData] = useState(null);
   const [trace, setTrace] = useState([]);
-  const [candidates, setCandidates] = useState(null);
   const [selectedLaptop, setSelectedLaptop] = useState(null);
+  const [showMatrixModal, setShowMatrixModal] = useState(false);
+  const [editablePairwiseMatrix, setEditablePairwiseMatrix] = useState([]);
+  const [isEditMatrix, setIsEditMatrix] = useState(false);
 
   useEffect(() => {
     Promise.all([
       getDashboard(sessionKey),
       getInferenceTrace(sessionKey),
       getCandidates(sessionKey)
-    ]).then(([dashRes, traceRes, candRes]) => {
-      setData(dashRes.data);
-      setTrace(traceRes.data.trace);
-      setCandidates(candRes.data);
-    }).catch(err => console.error("Lỗi khi tải dữ liệu Dashboard", err));
+    ])
+      .then(([dashRes, traceRes]) => {
+        setData(dashRes.data);
+        setTrace(traceRes.data.trace);
+      })
+      .catch((err) => console.error("Lỗi khi tải dữ liệu Dashboard", err));
   }, [sessionKey]);
 
-  if (!data) return (
-    <div className="bg-[#06080a] min-h-screen text-white flex items-center justify-center font-mono italic text-2xl animate-pulse text-formula-red">
-      <Zap className="mr-3 animate-bounce" /> LOADING REAL TELEMETRY DATA...
-    </div>
-  );
+  if (!data) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center px-6">
+        <div className="flex items-center gap-3 text-xl md:text-2xl font-bold text-sky-700 animate-pulse">
+          <Zap className="animate-bounce" />
+          LOADING ANALYSIS DASHBOARD...
+        </div>
+      </div>
+    );
+  }
 
-  // Chỉ lấy đúng dữ liệu từ backend, nếu không có thì để mảng rỗng để không bị crash
-  // 1. Lấy danh sách tên Tiêu chí và Mã tiêu chí (để làm cột và hàng)
   const matrixLabels = data.ahp?.weights?.map(w => w.name) || [];
   const criteriaCodes = data.ahp?.weights?.map(w => w.criterion) || [];
 
-  // 2. Chuyển đổi pairwiseMatrix từ Backend (Mảng 1 chiều) thành criteriaMatrix (Mảng 2 chiều)
   const flatMatrix = data.ahp?.pairwiseMatrix || [];
   const criteriaMatrix = [];
-
   if (flatMatrix.length > 0 && criteriaCodes.length > 0) {
-    // Vòng lặp tạo 8 hàng
     for (let i = 0; i < criteriaCodes.length; i++) {
       const rowArray = [];
-      // Vòng lặp tạo 8 cột trong mỗi hàng
       for (let j = 0; j < criteriaCodes.length; j++) {
-        // Tìm giá trị giao nhau giữa Hàng i và Cột j
-        const cell = flatMatrix.find(
-          c => c.row === criteriaCodes[i] && c.col === criteriaCodes[j]
-        );
+        const cell = flatMatrix.find(c => c.row === criteriaCodes[i] && c.col === criteriaCodes[j]);
         rowArray.push(cell ? cell.value : 0);
       }
       criteriaMatrix.push(rowArray);
     }
   }
 
+  const flatNormMatrix = data.ahp?.normalizedMatrix || [];
+  const normalizedMatrix = [];
+  if (flatNormMatrix.length > 0 && criteriaCodes.length > 0) {
+    for (let i = 0; i < criteriaCodes.length; i++) {
+      const rowArray = [];
+      for (let j = 0; j < criteriaCodes.length; j++) {
+        const cell = flatNormMatrix.find(c => c.row === criteriaCodes[i] && c.col === criteriaCodes[j]);
+        rowArray.push(cell ? cell.value : 0);
+      }
+      normalizedMatrix.push(rowArray);
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-[#06080a] text-white p-6 md:p-10 font-sans relative">
-      <div className="border-b border-gray-800 pb-6 mb-8 flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
-        <div>
-          <h2 className="text-formula-red font-bold uppercase tracking-[0.3em] text-[10px] mb-2 flex items-center gap-2">
-            <Activity size={14} className="animate-pulse" /> Session ID: {sessionKey.slice(0,8)}
-          </h2>
-          <h1 className="text-4xl md:text-5xl font-black italic tracking-tighter uppercase bg-gradient-to-r from-white to-gray-500 bg-clip-text text-transparent">
-            Analysis Dashboard
-          </h1>
-        </div>
-        <div className="text-right bg-formula-darker p-3 rounded-lg border border-gray-800">
-          <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest mb-1">Total Analyzed</p>
-          <p className="text-3xl font-mono text-formula-blue leading-none">{data.session?.hardFilterTotalCount ?? 0}</p>
-        </div>
-      </div>
+    <div className="min-h-screen bg-slate-100 text-slate-900 px-4 py-6 md:px-8 md:py-8">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* HEADER */}
+        <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8">
+          <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full bg-sky-50 text-sky-700 px-3 py-1.5 text-xs md:text-sm font-semibold uppercase tracking-wider">
+                <Activity size={16} />
+                Session ID: {sessionKey.slice(0, 8)}
+              </div>
 
-      {/* KHỐI GỢI Ý AI TỔNG QUAN */}
-      {data.aiSuggestion && (
-        <div className="bg-gradient-to-r from-[#0d1117] to-black border border-gray-800/60 p-5 md:p-6 rounded-2xl shadow-xl relative overflow-hidden mb-8">
-          <div className="absolute top-0 left-0 w-1 h-full bg-formula-red"></div>
-          <h2 className="text-formula-red font-black italic uppercase flex items-center gap-3 mb-2 text-sm md:text-base">
-            <Bot size={20} /> Tổng quan chiến lược từ AI
-          </h2>
-          <p className="text-gray-300 text-xs md:text-sm leading-relaxed max-w-5xl">
-            {data.aiSuggestion}
-          </p>
-        </div>
-      )}
+              <div>
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-slate-900">
+                  Analysis Dashboard
+                </h1>
+                <p className="text-sm md:text-base text-slate-500 mt-2 max-w-3xl">
+                  Tổng hợp kết quả lọc, phân tích AHP và gợi ý laptop phù hợp theo nhu cầu của bạn.
+                </p>
+              </div>
+            </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
-        
-        {/* CỘT TRÁI */}
-        <div className="xl:col-span-1 space-y-6">
-          <section className="bg-[#0d1117] p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-1 h-full bg-formula-blue"></div>
-            <div className="flex items-center gap-2 mb-6 text-formula-blue uppercase font-black text-xs tracking-widest">
-              <Filter size={16} /> Vòng loại (Khối A)
-            </div>
-            <div className="flex items-end gap-2">
-              <span className="text-5xl font-black">{data.session?.hardFilterPassCount ?? 0}</span>
-              <span className="text-gray-500 font-mono mb-1">/ {data.session?.hardFilterTotalCount ?? 0}</span>
-            </div>
-            <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-2">Máy đạt chuẩn phần cứng</p>
-          </section>
+            <div className="grid grid-cols-2 gap-4 min-w-full xl:min-w-[360px] xl:max-w-[420px]">
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
+                <p className="text-xs md:text-sm text-slate-500 font-semibold uppercase tracking-wide mb-2">
+                  Total Analyzed
+                </p>
+                <p className="text-2xl md:text-3xl font-extrabold text-sky-700">
+                  {data.session?.hardFilterTotalCount ?? 0}
+                </p>
+              </div>
 
-          <section className="bg-[#0d1117] p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500"></div>
-            <div className="flex items-center gap-2 mb-4 text-yellow-500 uppercase font-black text-xs tracking-widest">
-              <Activity size={16} /> Suy luận AI (Khối B)
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
+                <p className="text-xs md:text-sm text-slate-500 font-semibold uppercase tracking-wide mb-2">
+                  Passed Filter
+                </p>
+                <p className="text-2xl md:text-3xl font-extrabold text-emerald-600">
+                  {data.session?.hardFilterPassCount ?? 0}
+                </p>
+              </div>
             </div>
-            <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-              {trace?.filter(t => t.sourceType === 'filter').map((t, i) => (
-                <div key={i} className="text-[10px] leading-relaxed bg-black/40 p-3 rounded-lg border border-gray-800/50">
-                  <span className="text-yellow-500 font-black block mb-1 flex items-center gap-1">
-                    <ChevronRight size={12}/> +{t.scoreDelta} {t.name}
-                  </span>
-                  <span className="text-gray-400">{t.explanation}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        {/* CỘT GIỮA */}
-        <div className="xl:col-span-2 space-y-6">
-          <div className="flex items-center gap-3 mb-4 text-formula-red uppercase font-black text-sm italic tracking-widest border-b border-gray-800 pb-2">
-            <CheckCircle size={18} /> Top Recommendation (Khối E)
           </div>
-          
-          <div className="space-y-5">
-            {data.results?.map((item) => (
-              <div 
-                key={item.laptopId} 
-                onClick={() => setSelectedLaptop(item)}
-                className="group relative bg-[#0d1117] border border-gray-800 hover:border-formula-red transition-all duration-300 p-5 rounded-2xl cursor-pointer shadow-lg hover:shadow-[0_0_20px_rgba(225,6,0,0.2)] hover:-translate-y-1 overflow-hidden flex flex-col md:flex-row gap-6"
-              >
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-formula-red shadow-[0_0_15px_rgba(225,6,0,0.5)]"></div>
-                
-                <div className="w-full md:w-48 h-32 bg-black/50 rounded-xl flex items-center justify-center p-4 border border-gray-800/50 group-hover:border-formula-red/30 transition-colors">
-                  {item.imageUrl && <img src={item.imageUrl} className="max-w-full max-h-full object-contain drop-shadow-2xl transition-transform duration-500 group-hover:scale-110" alt={item.laptopName} />}
-                </div>
-                
-                <div className="flex-1 flex flex-col justify-center">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-xl font-black uppercase tracking-tighter text-gray-200 group-hover:text-white transition-colors">{item.laptopName}</h3>
-                    <div className="text-3xl font-black text-formula-red italic drop-shadow-[0_0_10px_rgba(225,6,0,0.3)]">{item.matchPercent ?? 0}%</div>
-                  </div>
-                  
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="bg-gradient-to-r from-formula-blue to-blue-700 text-white text-[10px] font-black px-3 py-1 rounded-md uppercase tracking-wider shadow-lg">
-                      {item.brand}
-                    </span>
-                    <span className="text-formula-blue font-mono text-sm">{item.price?.toLocaleString() || "Đang cập nhật"} VND</span>
-                  </div>
+        </section>
 
-                  <div className="flex flex-wrap gap-2">
-                    {item.reasons?.map((r, idx) => (
-                      <span key={idx} className="bg-formula-red/10 text-formula-red text-[9px] font-bold px-2.5 py-1 rounded-md uppercase border border-formula-red/20">{r}</span>
-                    ))}
-                  </div>
+        {/* AI SUMMARY */}
+        {data.aiSuggestion && (
+          <section className="bg-gradient-to-r from-sky-600 to-cyan-500 text-white rounded-3xl shadow-sm p-6 md:p-8 relative overflow-hidden">
+            <div className="absolute right-0 top-0 w-40 h-40 bg-white/10 rounded-full blur-3xl translate-x-10 -translate-y-10"></div>
+            <div className="relative z-10">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center">
+                  <Bot size={22} />
                 </div>
-                
-                <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                  <span className="text-[9px] text-gray-400 uppercase font-bold flex items-center gap-1 bg-black/50 px-2 py-1 rounded-full backdrop-blur-sm">
-                    Click xem chi tiết <ChevronRight size={10} />
-                  </span>
+                <div>
+                  <h2 className="text-lg md:text-xl font-bold">Tổng quan chiến lược từ AI</h2>
+                  <p className="text-white/80 text-sm md:text-base">Nhận xét chung cho phiên phân tích hiện tại</p>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* CỘT PHẢI */}
-        <div className="xl:col-span-1 space-y-6">
-          <section className="bg-[#0d1117] p-6 rounded-2xl border border-gray-800 shadow-xl sticky top-8">
-            <div className="flex items-center gap-2 mb-8 text-formula-blue uppercase font-black text-xs tracking-widest">
-              <Cpu size={16} /> Phân tích AHP (Khối C)
+              <p className="text-sm md:text-base leading-7 text-white/95 max-w-5xl">
+                {data.aiSuggestion}
+              </p>
             </div>
-            
-            <div className="space-y-6">
-              {data.ahp?.weights?.map(w => (
-                <div key={w.criterion} className="relative group">
-                  <div className="flex justify-between text-[10px] mb-2 uppercase font-bold tracking-wider">
-                    <span className="text-gray-400 flex items-center gap-1 cursor-help">
-                      {w.name} <Info size={10} className="text-gray-600 group-hover:text-formula-blue transition-colors"/>
-                    </span>
-                    <span className="text-formula-blue">{((w.weight || 0) * 100).toFixed(1)}%</span>
+          </section>
+        )}
+
+        {/* MAIN LAYOUT */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          {/* LEFT + CENTER */}
+          <div className="xl:col-span-8 space-y-6">
+            {/* STATS + TRACE */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-11 h-11 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center">
+                    <Filter size={20} />
                   </div>
-                  <div className="h-1.5 bg-gray-800 w-full rounded-full overflow-hidden shadow-inner">
-                    <div className="h-full bg-gradient-to-r from-formula-blue to-blue-400 relative" style={{ width: `${(w.weight || 0) * 100}%` }}>
-                       <div className="absolute top-0 right-0 w-2 h-full bg-white/50 blur-[1px]"></div>
-                    </div>
+                  <div>
+                    <h3 className="text-lg md:text-xl font-bold text-slate-900">Vòng loại phần cứng</h3>
+                    <p className="text-sm text-slate-500">Số máy vượt qua điều kiện ban đầu</p>
                   </div>
-                  
-                  {w.description && (
-                    <div className="absolute left-0 bottom-full mb-2 w-full bg-black/90 backdrop-blur-sm border border-gray-700 text-gray-300 text-[10px] p-2.5 rounded shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-20">
-                      {w.description}
-                      <div className="absolute left-4 -bottom-1 border-t-4 border-t-gray-700 border-l-4 border-l-transparent border-r-4 border-r-transparent"></div>
+                </div>
+
+                <div className="flex items-end gap-3">
+                  <span className="text-5xl md:text-6xl font-extrabold text-slate-900">
+                    {data.session?.hardFilterPassCount ?? 0}
+                  </span>
+                  <span className="text-lg md:text-xl text-slate-400 font-semibold mb-2">
+                    / {data.session?.hardFilterTotalCount ?? 0}
+                  </span>
+                </div>
+
+                <div className="mt-5 h-3 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-sky-500 to-cyan-400 rounded-full"
+                    style={{
+                      width: `${
+                        (data.session?.hardFilterTotalCount ?? 0) > 0
+                          ? ((data.session?.hardFilterPassCount ?? 0) / (data.session?.hardFilterTotalCount ?? 1)) * 100
+                          : 0
+                      }%`
+                    }}
+                  />
+                </div>
+              </section>
+
+              <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center">
+                    <Activity size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg md:text-xl font-bold text-slate-900">Suy luận AI</h3>
+                    <p className="text-sm text-slate-500">Các điểm cộng được áp dụng trong quá trình đánh giá</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                  {trace?.filter(t => t.sourceType === 'filter').length > 0 ? (
+                    trace.filter(t => t.sourceType === 'filter').map((t, i) => (
+                      <div
+                        key={i}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="flex items-center gap-2 text-sm md:text-base font-bold text-amber-700 mb-1">
+                          <ChevronRight size={16} />
+                          +{t.scoreDelta} {t.name}
+                        </div>
+                        <p className="text-sm md:text-base text-slate-600 leading-6">
+                          {t.explanation}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-slate-500">
+                      Không có dữ liệu suy luận AI.
                     </div>
                   )}
                 </div>
-              ))}
+              </section>
             </div>
 
-            <div className="mt-8 pt-6 border-t border-gray-800/50">
-               <h4 className="text-[10px] text-gray-500 uppercase font-black mb-3 tracking-widest">Chỉ số nhất quán (Khối D)</h4>
-               <div className="grid grid-cols-2 gap-3 font-mono text-xs">
-                  <div className="bg-black/40 p-3 rounded-xl border border-gray-800 text-center text-gray-400">CI: <span className="text-white">{data.ahp?.consistency?.ci?.toFixed(3) ?? "-"}</span></div>
-                  <div className={`bg-black/40 p-3 rounded-xl border border-gray-800 text-center ${(data.ahp?.consistency?.cr ?? 1) < 0.1 ? 'text-green-500' : 'text-red-500'}`}>
-                    CR: <span className="font-bold">{data.ahp?.consistency?.cr?.toFixed(3) ?? "-"}</span>
-                  </div>
-               </div>
-            </div>
-
-            {/* Render Ma trận chỉ khi backend thực sự gửi về */}
-            {criteriaMatrix.length > 0 && matrixLabels.length > 0 && (
-              <div className="mt-6 pt-6 border-t border-gray-800/50">
-                 <h4 className="text-[10px] text-gray-500 uppercase font-black mb-3 tracking-widest">Ma trận so sánh cặp</h4>
-                 <div className="overflow-x-auto rounded-lg border border-gray-800">
-                   <table className="w-full text-center text-[10px] font-mono bg-black/30">
-                     <thead>
-                       <tr className="bg-gray-900">
-                         <th className="p-2 border-b border-r border-gray-800 text-gray-500">Tiêu chí</th>
-                         {matrixLabels.map(l => <th key={l} className="p-2 border-b border-gray-800 text-gray-400 truncate max-w-[50px]">{l}</th>)}
-                       </tr>
-                     </thead>
-                     <tbody>
-                       {criteriaMatrix.map((row, i) => (
-                         <tr key={i} className="hover:bg-white/5 transition-colors">
-                           <td className="p-2 border-b border-r border-gray-800/50 text-gray-400 text-left font-sans font-bold">{matrixLabels[i]}</td>
-                           {row.map((val, j) => (
-                             <td key={j} className="p-2 border-b border-gray-800/50 text-formula-blue">
-                               {Number.isInteger(val) ? val : val?.toFixed(2)}
-                             </td>
-                           ))}
-                         </tr>
-                       ))}
-                     </tbody>
-                   </table>
-                 </div>
+            {/* TOP RECOMMENDATION */}
+            <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-7">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-11 h-11 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center">
+                  <CheckCircle size={20} />
+                </div>
+                <div>
+                  <h3 className="text-xl md:text-2xl font-bold text-slate-900">Top Recommendation</h3>
+                  <p className="text-sm md:text-base text-slate-500">Danh sách laptop phù hợp nhất</p>
+                </div>
               </div>
-            )}
-          </section>
+
+              {!data.results || data.results.length === 0 ? (
+                <div className="rounded-3xl border border-rose-200 bg-rose-50 p-8 md:p-10 text-center">
+                  <Zap size={46} className="mx-auto text-rose-500 mb-4" />
+                  <h4 className="text-2xl font-bold text-slate-900 mb-2">Không tìm thấy máy phù hợp</h4>
+                  <p className="text-base text-slate-600 mb-6 max-w-2xl mx-auto leading-7">
+                    Bộ lọc hiện tại đang khá chặt. Không có laptop nào đáp ứng đầy đủ các tiêu chí về ngân sách và cấu hình bạn vừa chọn.
+                  </p>
+                  <button
+                    onClick={() => navigate('/')}
+                    className="px-6 py-3 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-base transition"
+                  >
+                    Quay lại bộ lọc
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {data.results.map((item) => (
+                    <div
+                      key={item.laptopId}
+                      onClick={() => setSelectedLaptop(item)}
+                      className="group rounded-3xl border border-slate-200 bg-slate-50 hover:bg-white hover:border-sky-300 p-5 md:p-6 transition cursor-pointer"
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-5 md:gap-6 items-center">
+                        <div className="h-40 rounded-2xl bg-white border border-slate-200 flex items-center justify-center p-4">
+                          {item.imageUrl && (
+                            <img
+                              src={item.imageUrl}
+                              alt={item.laptopName}
+                              className="max-w-full max-h-full object-contain transition-transform duration-300 group-hover:scale-105"
+                            />
+                          )}
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div>
+                              <h4 className="text-xl md:text-2xl font-bold text-slate-900 leading-snug">
+                                {item.laptopName}
+                              </h4>
+                              <div className="mt-2 flex flex-wrap items-center gap-3">
+                                <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 text-sm font-semibold">
+                                  {item.brand}
+                                </span>
+                                <span className="text-base md:text-lg font-semibold text-slate-700">
+                                  {item.price?.toLocaleString() || "Đang cập nhật"} VND
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 text-left lg:text-right">
+                              <p className="text-sm text-slate-500 font-medium mb-1">Độ phù hợp</p>
+                              <p className="text-3xl md:text-4xl font-extrabold text-rose-600">
+                                {item.matchPercent ?? 0}%
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-rose-500 to-orange-400 rounded-full"
+                              style={{ width: `${item.matchPercent ?? 0}%` }}
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {item.reasons?.map((r, idx) => (
+                              <span
+                                key={idx}
+                                className="px-3 py-1 rounded-full bg-rose-100 text-rose-700 text-sm font-medium"
+                              >
+                                {r.badgeLabel || r}
+                              </span>
+                            ))}
+                          </div>
+
+                          <div className="text-sm font-medium text-sky-700 flex items-center gap-1">
+                            Xem chi tiết <ChevronRight size={16} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* RIGHT */}
+          <div className="xl:col-span-4">
+            <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-7 xl:sticky xl:top-6 space-y-8">
+              {/* AHP WEIGHTS */}
+              <div>
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
+                    <Cpu size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Kết quả trọng số AHP</h3>
+                    <p className="text-sm text-slate-500">Mức độ ưu tiên của từng tiêu chí</p>
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  {data.ahp?.weights?.map(w => (
+                    <div key={w.criterion} className="group relative">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div className="flex items-center gap-1.5 text-sm md:text-base font-semibold text-slate-700">
+                          {w.name}
+                          <Info size={14} className="text-slate-400 group-hover:text-sky-600 transition-colors" />
+                        </div>
+                        <div className="text-sm md:text-base font-bold text-sky-700">
+                          {((w.weight || 0) * 100).toFixed(1)}%
+                        </div>
+                      </div>
+
+                      <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-indigo-500 to-sky-500 rounded-full"
+                          style={{ width: `${(w.weight || 0) * 100}%` }}
+                        />
+                      </div>
+
+                      {w.explanation && (
+                        <div className="absolute left-0 bottom-full mb-2 w-full rounded-2xl bg-slate-900 text-white text-sm p-3 shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition z-20">
+                          {w.explanation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* CONSISTENCY */}
+              <div className="border-t border-slate-200 pt-6">
+                <h4 className="text-base font-bold text-slate-900 mb-4">Chỉ số nhất quán</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
+                    <p className="text-sm text-slate-500 mb-1">CI</p>
+                    <p className="text-xl font-bold text-slate-900">
+                      {data.ahp?.consistency?.ci?.toFixed(3) ?? "-"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
+                    <p className="text-sm text-slate-500 mb-1">CR</p>
+                    <p className={`text-xl font-bold ${(data.ahp?.consistency?.cr ?? 1) < 0.1 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {data.ahp?.consistency?.cr?.toFixed(3) ?? "-"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* PAIRWISE MATRIX */}
+              {criteriaMatrix.length > 0 && matrixLabels.length > 0 && (
+                <div className="border-t border-slate-200 pt-6">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <h4 className="text-base font-bold text-slate-900">Ma trận so sánh cặp</h4>
+                    <button
+                      onClick={() => setShowMatrixModal(true)}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 text-sm font-semibold transition"
+                    >
+                      <Maximize2 size={16} />
+                      Mở rộng
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                    <table className="w-full text-sm text-center bg-white">
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="p-3 border-b border-r border-slate-200 text-slate-600 font-bold">Tiêu chí</th>
+                          {matrixLabels.map(l => (
+                            <th key={l} className="p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap">
+                              {l}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {criteriaMatrix.map((row, i) => (
+                          <tr key={i} className="hover:bg-slate-50">
+                            <td className="p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap">
+                              {matrixLabels[i]}
+                            </td>
+                            {row.map((val, j) => (
+                              <td key={j} className="p-3 border-b border-slate-200 text-sky-700 font-medium">
+                                {Number.isInteger(val) ? val : val?.toFixed(2)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* NORMALIZED MATRIX */}
+              {normalizedMatrix.length > 0 && matrixLabels.length > 0 && (
+                <div className="border-t border-slate-200 pt-6">
+                  <h4 className="text-base font-bold text-slate-900 mb-4">Ma trận chuẩn hóa</h4>
+
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                    <table className="w-full text-sm text-center bg-white">
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="p-3 border-b border-r border-slate-200 text-slate-600 font-bold">Tiêu chí</th>
+                          {matrixLabels.map(l => (
+                            <th key={l} className="p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap">
+                              {l}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {normalizedMatrix.map((row, i) => (
+                          <tr key={i} className="hover:bg-slate-50">
+                            <td className="p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap">
+                              {matrixLabels[i]}
+                            </td>
+                            {row.map((val, j) => (
+                              <td key={j} className="p-3 border-b border-slate-200 text-emerald-600 font-medium">
+                                {Number.isInteger(val) ? val : val?.toFixed(3)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
         </div>
       </div>
 
-      {/* MODAL CHI TIẾT */}
+      {/* MODAL CHI TIẾT LAPTOP */}
       {selectedLaptop && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-          <div 
-            className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" 
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
+          <div
+            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             onClick={() => setSelectedLaptop(null)}
           ></div>
 
-          <div className="relative bg-[#0d1117] border border-gray-700 w-full max-w-5xl rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
-            <div className="h-1.5 w-full bg-gradient-to-r from-formula-red via-formula-blue to-transparent"></div>
-            <button 
+          <div className="relative w-full max-w-6xl max-h-[92vh] overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-2xl flex flex-col">
+            <button
               onClick={() => setSelectedLaptop(null)}
-              className="absolute top-4 right-4 p-2 bg-black/50 text-gray-400 hover:text-white rounded-full transition-colors z-10 hover:bg-formula-red"
+              className="absolute top-4 right-4 z-10 w-11 h-11 rounded-full bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center transition"
             >
-              <X size={20} />
+              <X size={22} />
             </button>
 
-            <div className="p-8 overflow-y-auto custom-scrollbar">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                
+            <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 md:gap-10">
                 <div>
-                  <div className="bg-black/40 border border-gray-800 rounded-2xl p-8 mb-6 flex justify-center items-center h-64 relative">
-                    <div className="absolute top-4 left-4 bg-formula-blue text-black text-[10px] font-black px-3 py-1 rounded-md uppercase tracking-wider">
+                  <div className="h-72 rounded-3xl bg-slate-50 border border-slate-200 flex items-center justify-center p-6 relative mb-6">
+                    <div className="absolute top-4 left-4 px-3 py-1 rounded-full bg-sky-100 text-sky-700 text-sm font-semibold">
                       {selectedLaptop.brand}
                     </div>
-                    {selectedLaptop.imageUrl && <img src={selectedLaptop.imageUrl} alt={selectedLaptop.laptopName} className="max-w-full max-h-full object-contain drop-shadow-2xl" />}
+                    {selectedLaptop.imageUrl && (
+                      <img
+                        src={selectedLaptop.imageUrl}
+                        alt={selectedLaptop.laptopName}
+                        className="max-w-full max-h-full object-contain"
+                      />
+                    )}
                   </div>
-                  
-                  <h2 className="text-3xl font-black uppercase italic tracking-tighter mb-2">{selectedLaptop.laptopName}</h2>
-                  <p className="text-2xl font-mono text-formula-blue mb-6">{selectedLaptop.price?.toLocaleString() || "Đang cập nhật"} VND</p>
-                  
+
+                  <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900 leading-snug mb-2">
+                    {selectedLaptop.laptopName}
+                  </h2>
+                  <p className="text-xl md:text-2xl font-bold text-sky-700 mb-6">
+                    {selectedLaptop.price?.toLocaleString() || "Đang cập nhật"} VND
+                  </p>
+
                   {selectedLaptop.reasons?.length > 0 && (
-                    <div className="bg-formula-red/10 border border-formula-red/30 rounded-xl p-5 relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-16 h-full bg-formula-red/20 skew-x-12 translate-x-4"></div>
-                      <h4 className="text-[10px] text-formula-red uppercase font-black tracking-widest mb-3 flex items-center gap-2">
-                        <Bot size={14}/> Phân tích lý do (AI Inference)
+                    <div className="rounded-3xl border border-rose-200 bg-rose-50 p-5 md:p-6">
+                      <h4 className="text-base font-bold text-rose-700 mb-4 flex items-center gap-2">
+                        <Bot size={18} />
+                        Phân tích lý do
                       </h4>
-                      <ul className="space-y-2">
+
+                      <ul className="space-y-3">
                         {selectedLaptop.reasons.map((reason, idx) => (
-                          <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
-                            <CheckCircle size={14} className="text-formula-red shrink-0 mt-0.5" />
-                            <span>{reason}</span>
+                          <li key={idx} className="flex items-start gap-3 text-sm md:text-base text-slate-700">
+                            <CheckCircle size={18} className="text-rose-500 shrink-0 mt-0.5" />
+                            <span>{reason.badgeLabel || reason}</span>
                           </li>
                         ))}
                       </ul>
@@ -290,46 +527,166 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex flex-col justify-center">
-                  <div className="flex justify-between items-end mb-8 border-b border-gray-800 pb-4">
-                     <div>
-                        <h3 className="text-formula-blue font-black uppercase tracking-widest text-sm mb-1">Performance Telemetry</h3>
-                        <p className="text-[10px] text-gray-500 uppercase">Phân tích điểm số cấu hình (Max 100)</p>
-                     </div>
-                     <div className="text-right">
-                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Total Match</p>
-                        <p className="text-5xl font-black text-formula-red italic leading-none">{selectedLaptop.matchPercent ?? 0}%</p>
-                     </div>
+                  <div className="flex items-end justify-between gap-4 border-b border-slate-200 pb-5 mb-6">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">Performance Telemetry</h3>
+                      <p className="text-sm md:text-base text-slate-500 mt-1">
+                        Điểm chi tiết theo từng tiêu chí
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-sm text-slate-500 mb-1">Total Match</p>
+                      <p className="text-4xl md:text-5xl font-extrabold text-rose-600">
+                        {selectedLaptop.matchPercent ?? 0}%
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="space-y-6">
-                    {[
-                      { label: 'Sức mạnh CPU', val: selectedLaptop.scores?.cpu ?? 0, color: 'bg-blue-500' },
-                      { label: 'Sức mạnh GPU', val: selectedLaptop.scores?.gpu ?? 0, color: 'bg-purple-500' },
-                      { label: 'Tốc độ RAM & SSD', val: selectedLaptop.scores?.ram ?? 0, color: 'bg-green-500' },
-                      { label: 'Chất lượng Màn hình', val: selectedLaptop.scores?.screen ?? 0, color: 'bg-yellow-500' },
-                      { label: 'Tính di động', val: selectedLaptop.scores?.weight ?? 0, color: 'bg-teal-500' },
-                      { label: 'Thời lượng Pin', val: selectedLaptop.scores?.battery ?? 0, color: 'bg-orange-500' }
-                    ].map((score, idx) => (
-                      <div key={idx}>
-                        <div className="flex justify-between items-end mb-2">
-                           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">{score.label}</span>
-                           <span className="text-sm font-mono font-bold text-white">{score.val} <span className="text-[10px] text-gray-600">/100</span></span>
+                  <div className="space-y-5">
+                    {Object.entries(selectedLaptop.criteriaScores || {}).map(([crit, score], idx) => {
+                      const colors = [
+                        'bg-blue-500',
+                        'bg-purple-500',
+                        'bg-green-500',
+                        'bg-yellow-500',
+                        'bg-teal-500',
+                        'bg-orange-500',
+                        'bg-red-500',
+                        'bg-pink-500'
+                      ];
+                      const color = colors[idx % colors.length];
+
+                      return (
+                        <div key={idx}>
+                          <div className="flex justify-between items-center gap-3 mb-2">
+                            <span className="text-sm md:text-base font-semibold text-slate-700 uppercase">
+                              {crit}
+                            </span>
+                            <span className="text-sm md:text-base font-bold text-slate-900">
+                              {score} <span className="text-slate-400">/100</span>
+                            </span>
+                          </div>
+                          <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full ${color} rounded-full`}
+                              style={{ width: `${score}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="h-2 w-full bg-gray-800 rounded-full overflow-hidden shadow-inner">
-                           <div className={`h-full ${score.color} relative transition-all duration-1000 ease-out`} style={{ width: `${score.val}%` }}>
-                              <div className="absolute top-0 right-0 w-4 h-full bg-white/30 skew-x-12"></div>
-                           </div>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
-                  <button 
-                    onClick={() => window.open(`https://www.google.com/search?q=mua+laptop+${selectedLaptop.laptopName}`, '_blank')}
-                    className="w-full mt-10 bg-formula-blue hover:bg-blue-600 text-black font-black py-4 rounded-xl uppercase tracking-widest transition-all hover:shadow-[0_0_20px_rgba(0,210,255,0.4)]"
+                  <button
+                    onClick={() =>
+                      window.open(`https://www.google.com/search?q=mua+laptop+${selectedLaptop.laptopName}`, '_blank')
+                    }
+                    className="w-full mt-8 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-base py-3.5 transition"
                   >
                     Tìm nơi mua sản phẩm này
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MA TRẬN */}
+      {showMatrixModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 md:p-6">
+          <div
+            className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm"
+            onClick={() => setShowMatrixModal(false)}
+          ></div>
+
+          <div className="relative w-full max-w-7xl max-h-[94vh] overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between gap-4 p-6 border-b border-slate-200">
+              <div>
+                <h2 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center gap-3">
+                  <Cpu size={26} className="text-sky-700" />
+                  Chi tiết Ma trận AHP
+                </h2>
+                <p className="text-sm md:text-base text-slate-500 mt-1">
+                  Bảng tính toán trọng số theo phương pháp Saaty
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowMatrixModal(false)}
+                className="w-11 h-11 rounded-full bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center transition"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto custom-scrollbar space-y-10">
+              <div>
+                <h4 className="text-xl font-bold text-sky-700 mb-4">
+                  1. Ma trận So sánh cặp (Pairwise Matrix)
+                </h4>
+                <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                  <table className="w-full text-center text-base bg-white">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="p-4 border-b border-r border-slate-200 text-slate-700 font-bold">Tiêu chí</th>
+                        {matrixLabels.map(l => (
+                          <th key={l} className="p-4 border-b border-slate-200 text-slate-700 font-bold whitespace-nowrap">
+                            {l}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {criteriaMatrix.map((row, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="p-4 border-b border-r border-slate-200 text-left text-slate-800 font-semibold whitespace-nowrap">
+                            {matrixLabels[i]}
+                          </td>
+                          {row.map((val, j) => (
+                            <td key={j} className="p-4 border-b border-slate-200 text-sky-700 font-medium">
+                              {Number.isInteger(val) ? val : val?.toFixed(2)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xl font-bold text-emerald-600 mb-4">
+                  2. Ma trận Chuẩn hóa (Normalized Matrix)
+                </h4>
+                <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                  <table className="w-full text-center text-base bg-white">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="p-4 border-b border-r border-slate-200 text-slate-700 font-bold">Tiêu chí</th>
+                        {matrixLabels.map(l => (
+                          <th key={l} className="p-4 border-b border-slate-200 text-slate-700 font-bold whitespace-nowrap">
+                            {l}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {normalizedMatrix.map((row, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="p-4 border-b border-r border-slate-200 text-left text-slate-800 font-semibold whitespace-nowrap">
+                            {matrixLabels[i]}
+                          </td>
+                          {row.map((val, j) => (
+                            <td key={j} className="p-4 border-b border-slate-200 text-emerald-600 font-medium">
+                              {Number.isInteger(val) ? val : val?.toFixed(3)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>

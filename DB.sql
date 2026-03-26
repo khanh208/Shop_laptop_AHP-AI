@@ -81,7 +81,10 @@ VALUES
 ('general', 'Phổ thông', 'Nhu cầu chung, lướt web, học tập, văn phòng nhẹ'),
 ('accountant', 'Kế toán', 'Excel nặng, phần mềm kế toán, nhiều tab, làm việc văn phòng'),
 ('programmer', 'Lập trình', 'IDE, Docker, máy ảo, backend/frontend, compile'),
-('student', 'Sinh viên', 'Học tập, làm bài, thuyết trình, di chuyển nhiều'),
+('student_it', 'Sinh viên CNTT', 'Lập trình, Docker, thuật toán, cần RAM và CPU mạnh, nâng cấp dễ'),
+('student_economics', 'Sinh viên Kinh tế', 'Làm slide, Word, Excel, chạy deadline di động, ưu tiên mỏng nhẹ pin trâu'),
+('student_design', 'Sinh viên Đồ họa', 'Photoshop, Premiere, render 3D, màn chuẩn màu, GPU/VGA mạnh'),
+('student_engineering', 'Sinh viên Cơ khí', 'AutoCAD, SolidWorks, MATLAB, mô phỏng nặng, ưu tiên CPU/GPU tản nhiệt tốt'),
 ('gamer', 'Chơi game', 'Game online/offline, ưu tiên GPU/CPU/màn hình'),
 ('designer', 'Thiết kế', 'Photoshop, Figma, Illustrator, Premiere, hiển thị đẹp'),
 ('office', 'Văn phòng', 'Word, Excel, trình chiếu, họp online')
@@ -133,15 +136,45 @@ WITH rule_seed(profile_code, criterion_code, base_score, explanation_template) A
     ('programmer', 'durability', 1.0, 'Độ bền quan trọng ở mức vừa phải.'),
     ('programmer', 'upgradeability', 2.0, 'Khả năng nâng cấp có ích cho nhu cầu dài hạn.'),
 
-    -- student
-    ('student', 'cpu', 1.8, 'Sinh viên cần CPU khá để học tập và tác vụ thông thường.'),
-    ('student', 'ram', 1.8, 'RAM đủ tốt giúp học tập và đa nhiệm cơ bản.'),
-    ('student', 'gpu', 0.5, 'GPU thường không phải ưu tiên chính với đa số sinh viên.'),
-    ('student', 'screen', 1.0, 'Màn hình đủ dùng cho học tập và giải trí nhẹ.'),
-    ('student', 'weight', 1.8, 'Sinh viên thường mang máy đi nhiều nên trọng lượng khá quan trọng.'),
-    ('student', 'battery', 2.0, 'Pin lâu là lợi thế lớn khi học tập di động.'),
-    ('student', 'durability', 1.2, 'Độ bền tốt giúp dùng lâu trong nhiều năm học.'),
-    ('student', 'upgradeability', 1.0, 'Nâng cấp ở mức vừa phải là đủ.'),
+    -- student_it
+    ('student_it', 'cpu', 2.8, 'Sinh viên CNTT cần CPU đa nhân để code, compile, chạy máy ảo.'),
+    ('student_it', 'ram', 3.0, 'RAM là yếu tố cốt lõi để chạy các IDE nặng và Docker.'),
+    ('student_it', 'gpu', 1.0, 'GPU rời có thể cần nếu học môn AI/Game, máy ảo hóa nhẹ.'),
+    ('student_it', 'screen', 1.5, 'Màn hình đủ lớn và dịu mắt giúp code thoải mái dài hạn.'),
+    ('student_it', 'weight', 1.8, 'Trọng lượng nhẹ giúp dễ mang máy lên PC lab và giảng đường.'),
+    ('student_it', 'battery', 1.8, 'Pin khá giúp làm việc nhóm không phụ thuộc quá nhiều vào ổ cắm.'),
+    ('student_it', 'durability', 1.5, 'Độ bền giúp máy gắn bó suốt 4 năm học.'),
+    ('student_it', 'upgradeability', 2.5, 'Khả năng nấp cấp RAM, SSD về sau là cực kỳ quan trọng cho CNTT.'),
+
+    -- student_economics
+    ('student_economics', 'cpu', 1.5, 'CPU đủ dùng để chạy mượt Office, SPSS, đa phương tiện.'),
+    ('student_economics', 'ram', 1.8, 'RAM cần ở mức vừa phải để mở nhiều tab tìm tài liệu.'),
+    ('student_economics', 'gpu', 0.5, 'Sinh viên kinh tế thường không bắt buộc có GPU rới.'),
+    ('student_economics', 'screen', 1.8, 'Cần màn hình đẹp để thuyết trình, làm slide, xem nội dung rõ nét.'),
+    ('student_economics', 'weight', 3.0, 'Di chuyển cực nhiều, trọng lượng nhẹ là tối ưu nhất.'),
+    ('student_economics', 'battery', 3.0, 'Pin trâu là yếu tố sống còn để học trên thư viện, quán cafe dài giờ.'),
+    ('student_economics', 'durability', 1.5, 'Thiết kế bền bỉ và đẹp nhẹ là ưu thế.'),
+    ('student_economics', 'upgradeability', 1.0, 'Ít khi cần chọc vào phần cứng nâng cấp.'),
+
+    -- student_design
+    ('student_design', 'cpu', 2.5, 'CPU xung lớn, đa nhân giúp xử lý tác vụ media, render hiệu quả.'),
+    ('student_design', 'ram', 2.5, 'RAM tối thiểu 16GB để mở mượt mà Lightroom, Illustrator, Photoshop.'),
+    ('student_design', 'gpu', 3.0, 'Bắt buộc cần GPU / card đồ họa khỏe để tăng tốc đồ họa, dựng video 3D.'),
+    ('student_design', 'screen', 3.0, 'Màn hình chuẩn màu, sáng, màu sắc nịnh là cốt lõi dân thiết kế.'),
+    ('student_design', 'weight', 1.0, 'Thường phải đánh đổi mang máy to dày để có cấu hình mạnh tản nhiệt tốt.'),
+    ('student_design', 'battery', 1.0, 'Cấu hình cao ngốn điện, đa số cần cắm sạc khi render.'),
+    ('student_design', 'durability', 1.5, 'Cần dàn tản nhiệt tốt, khung máy chắc chắn chịu nhiệt lâu.'),
+    ('student_design', 'upgradeability', 1.5, 'Linh hoạt thêm ổ cứng để chứa kho file ảnh video thô đồ sộ.'),
+
+    -- student_engineering
+    ('student_engineering', 'cpu', 3.0, 'Mô phỏng AutoCAD, SolidWorks, MATLAB yêu cầu CPU cực kỳ trâu bò.'),
+    ('student_engineering', 'ram', 2.5, 'Cần mức RAM lớn để xử lý bản vẽ lắp ráp phức tạp.'),
+    ('student_engineering', 'gpu', 2.5, 'Rất cần GPU rời mạnh để xoay, render mô hình CAD 3D mượt mà.'),
+    ('student_engineering', 'screen', 2.0, 'Màn hình kích thước đủ lớn dễ quan sát bản vẽ chi tiết.'),
+    ('student_engineering', 'weight', 1.0, 'Dòng workstation / gaming phục vụ mô phỏng thường rất nặng.'),
+    ('student_engineering', 'battery', 1.0, 'Pin hao rất nhanh khi dùng app CAD, thường xuyên cần cắm điện.'),
+    ('student_engineering', 'durability', 2.0, 'Độ bền khung nhôm, tản nhiệt buồng hơi rất quan trọng cho vận hành.'),
+    ('student_engineering', 'upgradeability', 1.5, 'Thêm tùy chọn gắn ổ rộng rãi phục vụ lưu phần mềm mô phỏng nặng.'),
 
     -- gamer
     ('gamer', 'cpu', 2.5, 'Chơi game cần CPU tốt để hỗ trợ hiệu năng ổn định.'),
@@ -798,8 +831,10 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     -- 1. Import brands
-    INSERT INTO brands (name)
-    SELECT DISTINCT TRIM(brand_name)
+    INSERT INTO brands (code, name)
+    SELECT DISTINCT 
+        LOWER(REGEXP_REPLACE(TRIM(brand_name), '\s+', '-', 'g')),
+        TRIM(brand_name)
     FROM stg_laptop_data
     WHERE brand_name IS NOT NULL
       AND TRIM(brand_name) <> ''

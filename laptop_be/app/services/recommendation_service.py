@@ -201,8 +201,24 @@ def get_form_options(conn):
 def create_session_and_filters(conn, payload, user_id=None):
     usage_code = payload["usageProfile"]
     budget = payload.get("budget", {})
-    filters = payload.get("filters", {})
+    
+    # Tạo bản sao JSON của filters để có thể set default an toàn
+    filters = payload.get("filters", {}).copy()
     top_n = payload.get("topN", 10)
+
+    # --- NGUYÊN TẮC HARD FILTER MẶC ĐỊNH CHO SINH VIÊN (SMART DEFAULTS) ---
+    if usage_code == "student_it":
+        if not filters.get("minRamGb"):
+            filters["minRamGb"] = 16
+    elif usage_code == "student_design":
+        if not filters.get("minRamGb"):
+            filters["minRamGb"] = 16
+    elif usage_code == "student_economics":
+        if not filters.get("maxWeightKg"):
+            filters["maxWeightKg"] = 2.0
+    elif usage_code == "student_engineering":
+        if not filters.get("minRamGb"):
+            filters["minRamGb"] = 16
 
     usage_profile = _fetch_one(conn, """
         SELECT id, code, name
@@ -435,7 +451,7 @@ def run_hard_filter(conn, session_id):
 
 def infer_priorities(conn, session_id):
     session_row = _fetch_one(conn, """
-        SELECT es.id, up.id AS usage_profile_id, up.code AS usage_profile_code
+        SELECT es.id, es.request_payload, up.id AS usage_profile_id, up.code AS usage_profile_code
         FROM evaluation_sessions es
         JOIN usage_profiles up ON up.id = es.usage_profile_id
         WHERE es.id = :sid
@@ -533,6 +549,27 @@ def infer_priorities(conn, session_id):
 
     if filt["min_ssd_gb"] and filt["min_ssd_gb"] >= 1000:
         add_filter_boost("upgradeability", 0.5, "minSsdGb", "Khả năng nâng cấp được tăng do nhu cầu lưu trữ cao.")
+
+    # --- BỔ SUNG BOOST CHUYÊN BIỆT CHO ĐỐI TƯỢNG SINH VIÊN ---
+    profile_code = session_row["usage_profile_code"]
+    if profile_code.startswith("student_"):
+        if filt["max_price"] and filt["max_price"] <= 20000000:
+            add_filter_boost("durability", 1.0, "budgetStudentBoost", "Ngân sách hạn chế, cần ưu tiên độ bền để sử dụng lâu dài suốt 4 năm.")
+
+    # --- BỔ SUNG BOOST TỪ CÂU HỎI TRẮC NGHIỆM (QUIZ) ---
+    payload = session_row.get("request_payload") or {}
+    filters_payload = payload.get("filters", {})
+    carry_often = filters_payload.get("carryOften", False)
+    play_heavy_games = filters_payload.get("playHeavyGames", False)
+
+    if carry_often:
+        add_filter_boost("battery", 1.5, "carryOften", "Hệ thống ưu tiên Pin vì bạn thường xuyên xách máy ra ngoài.")
+        add_filter_boost("weight", 1.5, "carryOften", "Trọng lượng nhẹ được ưu tiên cao vì nhu cầu di chuyển nhiều của bạn.")
+
+    if play_heavy_games:
+        add_filter_boost("gpu", 2.0, "playHeavyGames", "GPU được tăng tối đa để đáp ứng nhu cầu trải nghiệm game nặng.")
+        add_filter_boost("cpu", 1.0, "playHeavyGames", "CPU được tăng thêm để xử lý tốt tác vụ nền khi chơi game.")
+        add_filter_boost("screen", 0.5, "playHeavyGames", "Màn hình được ưu tiên nhẹ để có trải nghiệm thị giác chơi game tốt hơn.")
 
     for code, score in priorities.items():
         conn.execute(text("""
@@ -727,7 +764,7 @@ def ai_score_candidates(conn, session_id):
     candidates = _fetch_all(conn, """
         SELECT
             ec.laptop_id,
-            l.price,
+            l.price, l.battery_hours, l.durability_score, l.upgradeability_score,
             f.norm_cpu, f.norm_ram, f.norm_gpu, f.norm_screen,
             f.norm_weight, f.norm_battery, f.norm_durability, f.norm_upgradeability
         FROM evaluation_candidates ec
@@ -745,15 +782,31 @@ def ai_score_candidates(conn, session_id):
     """)
 
     for c in candidates:
+        # Fallback tự động Normalize nếu DB bị rỗng các trường này (do Excel lỗi)
+        raw_bat = float(c["battery_hours"] or 0)
+        norm_bat = float(c["norm_battery"] or 0)
+        if norm_bat == 0 and raw_bat > 0:
+            norm_bat = min(raw_bat / 10.0, 1.0)  # Giả sử 10h pin = đỉnh 100%
+
+        raw_dur = float(c["durability_score"] or 0)
+        norm_dur = float(c["norm_durability"] or 0)
+        if norm_dur == 0 and raw_dur > 0:
+            norm_dur = min(raw_dur / 5.0, 1.0)  # Thang điểm độ bền thường từ 1-5
+
+        raw_upg = float(c["upgradeability_score"] or 0)
+        norm_upg = float(c["norm_upgradeability"] or 0)
+        if norm_upg == 0 and raw_upg > 0:
+            norm_upg = min(raw_upg / 5.0, 1.0)
+
         feature_map = {
             "Norm_CPU": float(c["norm_cpu"] or 0),
             "Norm_RAM": float(c["norm_ram"] or 0),
             "Norm_GPU": float(c["norm_gpu"] or 0),
             "Norm_Screen": float(c["norm_screen"] or 0),
             "Norm_Weight": float(c["norm_weight"] or 0),
-            "Norm_Battery": float(c["norm_battery"] or 0),
-            "Norm_Durability": float(c["norm_durability"] or 0),
-            "Norm_Upgrade": float(c["norm_upgradeability"] or 0),
+            "Norm_Battery": norm_bat,
+            "Norm_Durability": norm_dur,
+            "Norm_Upgrade": norm_upg,
             "Price (VND)": float(c["price"] or 0),
         }
 

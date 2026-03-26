@@ -11,35 +11,18 @@ from sqlalchemy import text
 from app.utils.ahp import build_ahp
 
 CRITERION_TO_FEATURE = {
-    "cpu": "norm_cpu",
-    "ram": "norm_ram",
-    "gpu": "norm_gpu",
-    "screen": "norm_screen",
-    "weight": "norm_weight",
-    "battery": "norm_battery",
-    "durability": "norm_durability",
-    "upgradeability": "norm_upgradeability",
+    "cpu": "Norm_CPU",
+    "ram": "Norm_RAM",
+    "gpu": "Norm_GPU",
+    "screen": "Norm_Screen",
+    "weight": "Norm_Weight",
+    "battery": "Norm_Battery",
+    "durability": "Norm_Durability",
+    "upgradeability": "Norm_Upgrade",
 }
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-
-DEFAULT_MODEL_PATHS = {
-    "performance": "Train AI/models/Performance_model.pkl",
-    "portability": "Train AI/models/Portability_model.pkl",
-}
-
-CRITERION_TO_MODEL_GROUP = {
-    "cpu": "performance",
-    "ram": "performance",
-    "gpu": "performance",
-    "screen": "portability",
-    "weight": "portability",
-    "battery": None,
-    "durability": None,
-    "upgradeability": None,
-}
-
-MODEL_INPUT_COLUMNS_7 = [
+MODEL_INPUT_COLUMNS = [
     "Norm_CPU",
     "Norm_RAM",
     "Norm_GPU",
@@ -47,6 +30,8 @@ MODEL_INPUT_COLUMNS_7 = [
     "Norm_Weight",
     "Norm_Battery",
     "Norm_Durability",
+    "Norm_Upgrade",
+    "Price (VND)",
 ]
 
 _MODEL_CACHE = {}
@@ -89,6 +74,31 @@ def _normalize_prediction_to_score_100(raw_value):
     return _clamp_score_100(raw_value)
 
 
+def _clamp_unit(value):
+    value = float(value or 0)
+    if value < 0:
+        return 0.0
+    if value > 1:
+        return 1.0
+    return value
+
+
+def _json_to_dict(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", errors="ignore")
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _resolve_model_path(relative_path):
     return (BASE_DIR / relative_path).resolve()
 
@@ -100,15 +110,13 @@ def _load_model(relative_path):
     return _MODEL_CACHE[full_path]
 
 
-def _get_model_artifact_for_criterion(conn, criterion_id, criterion_code):
+def _get_model_artifact_for_criterion(conn, criterion_id):
     row = _fetch_one(conn, """
         SELECT id, artifact_path
         FROM ml_models
         WHERE is_active = TRUE
-          AND (criterion_id = :criterion_id OR criterion_id IS NULL)
-        ORDER BY
-            CASE WHEN criterion_id = :criterion_id THEN 0 ELSE 1 END,
-            created_at DESC
+          AND criterion_id = :criterion_id
+        ORDER BY created_at DESC
         LIMIT 1
     """, {
         "criterion_id": criterion_id,
@@ -116,28 +124,14 @@ def _get_model_artifact_for_criterion(conn, criterion_id, criterion_code):
 
     if row and row["artifact_path"]:
         return row["id"], row["artifact_path"]
-
-    model_group = CRITERION_TO_MODEL_GROUP.get(criterion_code)
-    if not model_group:
-        return None, None
-
-    return None, DEFAULT_MODEL_PATHS.get(model_group)
+    return None, None
 
 
 def _predict_model_score(model, feature_map):
-    df7 = pd.DataFrame([{
-        "Norm_CPU": feature_map["Norm_CPU"],
-        "Norm_RAM": feature_map["Norm_RAM"],
-        "Norm_GPU": feature_map["Norm_GPU"],
-        "Norm_Screen": feature_map["Norm_Screen"],
-        "Norm_Weight": feature_map["Norm_Weight"],
-        "Norm_Battery": feature_map["Norm_Battery"],
-        "Norm_Durability": feature_map["Norm_Durability"],
-    }])
+    df = pd.DataFrame([{col: feature_map[col] for col in MODEL_INPUT_COLUMNS}])
+    arr = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS]], dtype=float)
 
-    arr7 = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS_7]], dtype=float)
-
-    attempts = [df7, arr7]
+    attempts = [df, arr]
     last_error = None
 
     for X in attempts:
@@ -150,6 +144,85 @@ def _predict_model_score(model, feature_map):
             last_error = e
 
     raise last_error
+
+
+def _coalesce_numeric(*values):
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except Exception:
+            continue
+    return None
+
+
+def _normalize_benefit(raw_value, max_value, min_value=0.0):
+    value = _coalesce_numeric(raw_value)
+    if value is None:
+        return None
+    if max_value <= min_value:
+        return None
+    return _clamp_unit((value - min_value) / (max_value - min_value))
+
+
+def _normalize_cost(raw_value, min_value, max_value):
+    value = _coalesce_numeric(raw_value)
+    if value is None:
+        return None
+    if max_value <= min_value:
+        return None
+    return _clamp_unit((max_value - value) / (max_value - min_value))
+
+
+def _build_feature_map(candidate):
+    feature_map = {
+        "Norm_CPU": _coalesce_numeric(candidate["norm_cpu"]),
+        "Norm_RAM": _coalesce_numeric(candidate["norm_ram"]),
+        "Norm_GPU": _coalesce_numeric(candidate["norm_gpu"]),
+        "Norm_Screen": _coalesce_numeric(candidate["norm_screen"]),
+        "Norm_Weight": _coalesce_numeric(candidate["norm_weight"]),
+        "Norm_Battery": _coalesce_numeric(candidate["norm_battery"]),
+        "Norm_Durability": _coalesce_numeric(candidate["norm_durability"]),
+        "Norm_Upgrade": _coalesce_numeric(candidate["norm_upgradeability"]),
+        "Price (VND)": _coalesce_numeric(candidate["price"], 0.0) or 0.0,
+    }
+
+    fallbacks = {
+        "Norm_CPU": _normalize_benefit(candidate["cpu_benchmark_score"], max_value=10.0),
+        "Norm_RAM": _normalize_benefit(candidate["ram_gb"], max_value=64.0),
+        "Norm_GPU": _normalize_benefit(candidate["gpu_benchmark_score"], max_value=10.0),
+        "Norm_Screen": _normalize_benefit(candidate["screen_size_inch"], min_value=11.0, max_value=18.0),
+        "Norm_Weight": _normalize_cost(candidate["weight_kg"], min_value=0.8, max_value=3.5),
+        "Norm_Battery": _normalize_benefit(candidate["battery_hours"], max_value=12.0),
+        "Norm_Durability": _normalize_benefit(candidate["durability_score"], max_value=10.0),
+        "Norm_Upgrade": _normalize_benefit(candidate["upgradeability_score"], max_value=10.0),
+    }
+
+    sources = {}
+    missing = []
+
+    for key, current_value in list(feature_map.items()):
+        if key == "Price (VND)":
+            sources[key] = "db_price"
+            continue
+
+        if current_value is not None:
+            feature_map[key] = _clamp_unit(current_value)
+            sources[key] = "normalized_feature"
+            continue
+
+        fallback_value = fallbacks.get(key)
+        if fallback_value is not None:
+            feature_map[key] = _clamp_unit(fallback_value)
+            sources[key] = "raw_fallback"
+            continue
+
+        feature_map[key] = None
+        sources[key] = "missing"
+        missing.append(key)
+
+    return feature_map, sources, missing
 
 
 def get_form_options(conn):
@@ -557,7 +630,7 @@ def infer_priorities(conn, session_id):
             add_filter_boost("durability", 1.0, "budgetStudentBoost", "Ngân sách hạn chế, cần ưu tiên độ bền để sử dụng lâu dài suốt 4 năm.")
 
     # --- BỔ SUNG BOOST TỪ CÂU HỎI TRẮC NGHIỆM (QUIZ) ---
-    payload = session_row.get("request_payload") or {}
+    payload = _json_to_dict(session_row.get("request_payload"))
     filters_payload = payload.get("filters", {})
     carry_often = filters_payload.get("carryOften", False)
     play_heavy_games = filters_payload.get("playHeavyGames", False)
@@ -764,12 +837,20 @@ def ai_score_candidates(conn, session_id):
     candidates = _fetch_all(conn, """
         SELECT
             ec.laptop_id,
-            l.price, l.battery_hours, l.durability_score, l.upgradeability_score,
+            l.price,
+            l.ram_gb,
+            l.cpu_benchmark_score,
+            l.gpu_benchmark_score,
+            l.screen_size_inch,
+            l.weight_kg,
+            l.battery_hours,
+            l.durability_score,
+            l.upgradeability_score,
             f.norm_cpu, f.norm_ram, f.norm_gpu, f.norm_screen,
             f.norm_weight, f.norm_battery, f.norm_durability, f.norm_upgradeability
         FROM evaluation_candidates ec
         JOIN laptops l ON l.id = ec.laptop_id
-        JOIN laptop_ml_features f ON f.laptop_id = ec.laptop_id
+        LEFT JOIN laptop_ml_features f ON f.laptop_id = ec.laptop_id
         WHERE ec.evaluation_session_id = :sid
           AND ec.hard_filter_passed = TRUE
     """, {"sid": session_id})
@@ -782,73 +863,41 @@ def ai_score_candidates(conn, session_id):
     """)
 
     for c in candidates:
-        # Fallback tự động Normalize nếu DB bị rỗng các trường này (do Excel lỗi)
-        raw_bat = float(c["battery_hours"] or 0)
-        norm_bat = float(c["norm_battery"] or 0)
-        if norm_bat == 0 and raw_bat > 0:
-            norm_bat = min(raw_bat / 10.0, 1.0)  # Giả sử 10h pin = đỉnh 100%
-
-        raw_dur = float(c["durability_score"] or 0)
-        norm_dur = float(c["norm_durability"] or 0)
-        if norm_dur == 0 and raw_dur > 0:
-            norm_dur = min(raw_dur / 5.0, 1.0)  # Thang điểm độ bền thường từ 1-5
-
-        raw_upg = float(c["upgradeability_score"] or 0)
-        norm_upg = float(c["norm_upgradeability"] or 0)
-        if norm_upg == 0 and raw_upg > 0:
-            norm_upg = min(raw_upg / 5.0, 1.0)
-
-        feature_map = {
-            "Norm_CPU": float(c["norm_cpu"] or 0),
-            "Norm_RAM": float(c["norm_ram"] or 0),
-            "Norm_GPU": float(c["norm_gpu"] or 0),
-            "Norm_Screen": float(c["norm_screen"] or 0),
-            "Norm_Weight": float(c["norm_weight"] or 0),
-            "Norm_Battery": norm_bat,
-            "Norm_Durability": norm_dur,
-            "Norm_Upgrade": norm_upg,
-            "Price (VND)": float(c["price"] or 0),
-        }
+        feature_map, feature_sources, missing_features = _build_feature_map(c)
 
         for criterion in criteria:
             criterion_code = criterion["code"]
+            feature_name = CRITERION_TO_FEATURE[criterion_code]
+            base_score = feature_map.get(feature_name)
 
-            if criterion_code == "battery":
-                raw_prediction = feature_map["Norm_Battery"]
-                score_100 = _clamp_score_100(raw_prediction * 100.0)
+            if base_score is None:
+                raw_prediction = None
+                normalized_prediction = None
+                score_100 = 0.0
                 model_id = None
-
-            elif criterion_code == "durability":
-                raw_prediction = feature_map["Norm_Durability"]
-                score_100 = _clamp_score_100(raw_prediction * 100.0)
-                model_id = None
-
-            elif criterion_code == "upgradeability":
-                raw_prediction = feature_map["Norm_Upgrade"]
-                score_100 = _clamp_score_100(raw_prediction * 100.0)
-                model_id = None
-
+                score_source = "missing_feature"
             else:
-                feature_name = CRITERION_TO_FEATURE[criterion_code]
-                fallback_raw = float(c[feature_name] or 0)
-                fallback_score_100 = _clamp_score_100(fallback_raw * 100.0)
+                raw_prediction = base_score
+                normalized_prediction = base_score
+                score_100 = _clamp_score_100(base_score * 100.0)
+                model_id = None
+                score_source = feature_sources.get(feature_name, "normalized_feature")
 
                 model_id, artifact_path = _get_model_artifact_for_criterion(
                     conn=conn,
                     criterion_id=criterion["id"],
-                    criterion_code=criterion_code,
                 )
 
-                raw_prediction = fallback_raw
-                score_100 = fallback_score_100
-
-                if artifact_path:
+                if artifact_path and not missing_features:
                     try:
                         model = _load_model(artifact_path)
                         raw_prediction, score_100 = _predict_model_score(model, feature_map)
+                        normalized_prediction = score_100 / 100.0
+                        score_source = "criterion_model"
                     except Exception:
-                        raw_prediction = fallback_raw
-                        score_100 = fallback_score_100
+                        model_id = None
+                elif artifact_path and missing_features:
+                    model_id = None
 
             conn.execute(text("""
                 INSERT INTO evaluation_ai_scores (
@@ -865,9 +914,14 @@ def ai_score_candidates(conn, session_id):
                 "criterion_id": criterion["id"],
                 "model_id": model_id,
                 "raw_prediction": raw_prediction,
-                "normalized_prediction": raw_prediction,
+                "normalized_prediction": normalized_prediction,
                 "score_100": score_100,
-                "input_snapshot": json.dumps(feature_map),
+                "input_snapshot": json.dumps({
+                    "features": feature_map,
+                    "featureSources": feature_sources,
+                    "missingFeatures": missing_features,
+                    "scoreSource": score_source,
+                }),
             })
 
     conn.execute(text("""

@@ -1,11 +1,6 @@
 import json
 from collections import defaultdict
 from decimal import Decimal
-from pathlib import Path
-
-import joblib
-import numpy as np
-import pandas as pd
 from sqlalchemy import text
 
 from app.utils.ahp import build_ahp
@@ -21,20 +16,8 @@ CRITERION_TO_FEATURE = {
     "upgradeability": "Norm_Upgrade",
 }
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-MODEL_INPUT_COLUMNS = [
-    "Norm_CPU",
-    "Norm_RAM",
-    "Norm_GPU",
-    "Norm_Screen",
-    "Norm_Weight",
-    "Norm_Battery",
-    "Norm_Durability",
-    "Norm_Upgrade",
-    "Price (VND)",
-]
-
-_MODEL_CACHE = {}
+PAIRWISE_ALTERNATIVE_LIMIT = 10
+PAIRWISE_EPSILON = 1e-6
 
 
 def _float_or_none(value):
@@ -62,18 +45,6 @@ def _clamp_score_100(value):
     return value
 
 
-def _normalize_prediction_to_score_100(raw_value):
-    raw_value = float(raw_value or 0)
-
-    if 0.0 <= raw_value <= 1.0:
-        return _clamp_score_100(raw_value * 100.0)
-
-    if 0.0 <= raw_value <= 10.0:
-        return _clamp_score_100(raw_value * 10.0)
-
-    return _clamp_score_100(raw_value)
-
-
 def _clamp_unit(value):
     value = float(value or 0)
     if value < 0:
@@ -97,53 +68,6 @@ def _json_to_dict(value):
         except Exception:
             return {}
     return {}
-
-
-def _resolve_model_path(relative_path):
-    return (BASE_DIR / relative_path).resolve()
-
-
-def _load_model(relative_path):
-    full_path = str(_resolve_model_path(relative_path))
-    if full_path not in _MODEL_CACHE:
-        _MODEL_CACHE[full_path] = joblib.load(full_path)
-    return _MODEL_CACHE[full_path]
-
-
-def _get_model_artifact_for_criterion(conn, criterion_id):
-    row = _fetch_one(conn, """
-        SELECT id, artifact_path
-        FROM ml_models
-        WHERE is_active = TRUE
-          AND criterion_id = :criterion_id
-        ORDER BY created_at DESC
-        LIMIT 1
-    """, {
-        "criterion_id": criterion_id,
-    })
-
-    if row and row["artifact_path"]:
-        return row["id"], row["artifact_path"]
-    return None, None
-
-
-def _predict_model_score(model, feature_map):
-    df = pd.DataFrame([{col: feature_map[col] for col in MODEL_INPUT_COLUMNS}])
-    arr = np.array([[feature_map[col] for col in MODEL_INPUT_COLUMNS]], dtype=float)
-
-    attempts = [df, arr]
-    last_error = None
-
-    for X in attempts:
-        try:
-            pred = model.predict(X)
-            raw_prediction = float(pred[0])
-            score_100 = _normalize_prediction_to_score_100(raw_prediction)
-            return raw_prediction, score_100
-        except Exception as e:
-            last_error = e
-
-    raise last_error
 
 
 def _coalesce_numeric(*values):
@@ -223,6 +147,96 @@ def _build_feature_map(candidate):
         missing.append(key)
 
     return feature_map, sources, missing
+
+
+def _compute_ahp_from_pairwise_matrix(matrix):
+    n = len(matrix)
+    if n == 0:
+        return {
+            "weights": [],
+            "summary": {
+                "criteria_count": 0,
+                "lambda_max": 0.0,
+                "ci": 0.0,
+                "ri": 0.0,
+                "cr": 0.0,
+                "is_consistent": True,
+            },
+        }
+
+    col_sums = [sum(matrix[i][j] for i in range(n)) for j in range(n)]
+    normalized = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            denom = col_sums[j] if col_sums[j] else 1.0
+            row.append(matrix[i][j] / denom)
+        normalized.append(row)
+
+    weights = [sum(row) / n for row in normalized]
+
+    weighted_sum = [
+        sum(matrix[i][j] * weights[j] for j in range(n))
+        for i in range(n)
+    ]
+    lambda_values = []
+    for i in range(n):
+        if weights[i] == 0:
+            lambda_values.append(0.0)
+        else:
+            lambda_values.append(weighted_sum[i] / weights[i])
+
+    lambda_max = sum(lambda_values) / n if n else 0.0
+    ci = (lambda_max - n) / (n - 1) if n > 1 else 0.0
+    ri = {
+        1: 0.0,
+        2: 0.0,
+        3: 0.58,
+        4: 0.90,
+        5: 1.12,
+        6: 1.24,
+        7: 1.32,
+        8: 1.41,
+        9: 1.45,
+        10: 1.49,
+    }.get(n, 1.49)
+    cr = (ci / ri) if ri else 0.0
+
+    return {
+        "weights": weights,
+        "normalized_matrix": normalized,
+        "summary": {
+            "criteria_count": n,
+            "lambda_max": lambda_max,
+            "ci": ci,
+            "ri": ri,
+            "cr": cr,
+            "is_consistent": cr < 0.1,
+        },
+    }
+
+
+def _build_alternative_pairwise_matrix(candidate_rows, criterion_code, utilities_by_laptop):
+    adjusted = []
+    for candidate in candidate_rows:
+        utility = utilities_by_laptop.get(candidate["laptop_id"], 0.0)
+        adjusted.append(max(float(utility or 0.0), PAIRWISE_EPSILON))
+
+    matrix = []
+    for i in range(len(candidate_rows)):
+        row = []
+        for j in range(len(candidate_rows)):
+            row.append(adjusted[i] / adjusted[j])
+        matrix.append(row)
+
+    local_ahp = _compute_ahp_from_pairwise_matrix(matrix)
+
+    return {
+        "criterion": criterion_code,
+        "matrix": matrix,
+        "weights": local_ahp["weights"],
+        "summary": local_ahp["summary"],
+    }
 
 
 def get_form_options(conn):
@@ -834,6 +848,13 @@ def ai_score_candidates(conn, session_id):
         WHERE evaluation_session_id = :sid
     """), {"sid": session_id})
 
+    top_n_row = _fetch_one(conn, """
+        SELECT top_n
+        FROM evaluation_sessions
+        WHERE id = :sid
+    """, {"sid": session_id})
+    pairwise_limit = max(1, min(PAIRWISE_ALTERNATIVE_LIMIT, int(top_n_row["top_n"] or PAIRWISE_ALTERNATIVE_LIMIT)))
+
     candidates = _fetch_all(conn, """
         SELECT
             ec.laptop_id,
@@ -853,7 +874,17 @@ def ai_score_candidates(conn, session_id):
         LEFT JOIN laptop_ml_features f ON f.laptop_id = ec.laptop_id
         WHERE ec.evaluation_session_id = :sid
           AND ec.hard_filter_passed = TRUE
+        ORDER BY ec.laptop_id
     """, {"sid": session_id})
+
+    if not candidates:
+        raise ValueError("Không có candidate pass hard filter để so sánh cặp phương án")
+
+    if len(candidates) > pairwise_limit:
+        raise ValueError(
+            f"Số laptop sau hard filter là {len(candidates)}, vượt ngưỡng so sánh cặp AHP phương án ({pairwise_limit}). "
+            f"Hãy siết thêm bộ lọc để còn tối đa {pairwise_limit} máy."
+        )
 
     criteria = _fetch_all(conn, """
         SELECT id, code
@@ -862,42 +893,36 @@ def ai_score_candidates(conn, session_id):
         ORDER BY sort_order
     """)
 
+    criterion_utilities = {}
+    candidate_features = {}
     for c in candidates:
         feature_map, feature_sources, missing_features = _build_feature_map(c)
+        candidate_features[c["laptop_id"]] = {
+            "features": feature_map,
+            "featureSources": feature_sources,
+            "missingFeatures": missing_features,
+        }
 
         for criterion in criteria:
             criterion_code = criterion["code"]
             feature_name = CRITERION_TO_FEATURE[criterion_code]
-            base_score = feature_map.get(feature_name)
+            base_score = _clamp_unit(feature_map.get(feature_name) or 0.0)
+            criterion_utilities.setdefault(criterion_code, {})[c["laptop_id"]] = base_score
 
-            if base_score is None:
-                raw_prediction = None
-                normalized_prediction = None
-                score_100 = 0.0
-                model_id = None
-                score_source = "missing_feature"
-            else:
-                raw_prediction = base_score
-                normalized_prediction = base_score
-                score_100 = _clamp_score_100(base_score * 100.0)
-                model_id = None
-                score_source = feature_sources.get(feature_name, "normalized_feature")
+    for criterion in criteria:
+        criterion_code = criterion["code"]
+        utilities_by_laptop = criterion_utilities.get(criterion_code, {})
+        pairwise = _build_alternative_pairwise_matrix(
+            candidate_rows=candidates,
+            criterion_code=criterion_code,
+            utilities_by_laptop=utilities_by_laptop,
+        )
 
-                model_id, artifact_path = _get_model_artifact_for_criterion(
-                    conn=conn,
-                    criterion_id=criterion["id"],
-                )
-
-                if artifact_path and not missing_features:
-                    try:
-                        model = _load_model(artifact_path)
-                        raw_prediction, score_100 = _predict_model_score(model, feature_map)
-                        normalized_prediction = score_100 / 100.0
-                        score_source = "criterion_model"
-                    except Exception:
-                        model_id = None
-                elif artifact_path and missing_features:
-                    model_id = None
+        for idx, candidate in enumerate(candidates):
+            laptop_id = candidate["laptop_id"]
+            raw_prediction = utilities_by_laptop.get(laptop_id, 0.0)
+            normalized_prediction = pairwise["weights"][idx]
+            score_100 = _clamp_score_100(normalized_prediction * 100.0)
 
             conn.execute(text("""
                 INSERT INTO evaluation_ai_scores (
@@ -905,22 +930,24 @@ def ai_score_candidates(conn, session_id):
                     raw_prediction, normalized_prediction, score_100, input_snapshot
                 )
                 VALUES (
-                    :sid, :laptop_id, :criterion_id, :model_id,
+                    :sid, :laptop_id, :criterion_id, NULL,
                     :raw_prediction, :normalized_prediction, :score_100, CAST(:input_snapshot AS JSONB)
                 )
             """), {
                 "sid": session_id,
-                "laptop_id": c["laptop_id"],
+                "laptop_id": laptop_id,
                 "criterion_id": criterion["id"],
-                "model_id": model_id,
                 "raw_prediction": raw_prediction,
                 "normalized_prediction": normalized_prediction,
                 "score_100": score_100,
                 "input_snapshot": json.dumps({
-                    "features": feature_map,
-                    "featureSources": feature_sources,
-                    "missingFeatures": missing_features,
-                    "scoreSource": score_source,
+                    **candidate_features[laptop_id],
+                    "criterionCode": criterion_code,
+                    "criterionUtility": raw_prediction,
+                    "alternativePriority": normalized_prediction,
+                    "pairwiseMethod": "ratio_pairwise_from_criterion_utility",
+                    "pairwiseSummary": pairwise["summary"],
+                    "candidateCount": len(candidates),
                 }),
             })
 
@@ -1016,7 +1043,10 @@ def rank_candidates(conn, session_id):
                 "criterion_weight": w,
                 "ai_score_100": d["score_100"],
                 "weighted_score": weighted_score,
-                "explanation_data": json.dumps({"formula": "ai_score_100 * criterion_weight"}),
+                "explanation_data": json.dumps({
+                    "formula": "alternative_priority_100 * criterion_weight",
+                    "method": "ahp_criteria_weights + pairwise_alternative_priority",
+                }),
             })
 
     conn.execute(text("""
@@ -1602,6 +1632,169 @@ def get_ahp_by_session_key(conn, session_key):
             "cr": _float_or_none(summary["cr"]) if summary else None,
             "isConsistent": summary["is_consistent"] if summary else None,
         },
+    }
+
+
+def get_alternative_ahp_by_session_key(conn, session_key):
+    session_row = _get_session_by_key(conn, session_key)
+    if not session_row:
+        return None
+
+    session_meta = _fetch_one(conn, """
+        SELECT top_n, status, hard_filter_pass_count
+        FROM evaluation_sessions
+        WHERE id = :sid
+    """, {"sid": session_row["id"]})
+
+    criteria = _fetch_all(conn, """
+        SELECT id, code, name, sort_order
+        FROM recommendation_criteria
+        WHERE is_active = TRUE
+        ORDER BY sort_order
+    """)
+
+    candidates = _fetch_all(conn, """
+        SELECT DISTINCT
+            l.id AS laptop_id,
+            l.name AS laptop_name,
+            b.name AS brand_name
+        FROM evaluation_ai_scores eas
+        JOIN laptops l ON l.id = eas.laptop_id
+        LEFT JOIN brands b ON b.id = l.brand_id
+        WHERE eas.evaluation_session_id = :sid
+        ORDER BY l.id
+    """, {"sid": session_row["id"]})
+
+    score_rows = _fetch_all(conn, """
+        SELECT
+            rc.code AS criterion,
+            eas.laptop_id,
+            eas.raw_prediction,
+            eas.normalized_prediction
+        FROM evaluation_ai_scores eas
+        JOIN recommendation_criteria rc ON rc.id = eas.criterion_id
+        WHERE eas.evaluation_session_id = :sid
+        ORDER BY rc.sort_order, eas.laptop_id
+    """, {"sid": session_row["id"]})
+
+    if not candidates:
+        hard_filter_pass_count = int((session_meta or {}).get("hard_filter_pass_count") or 0)
+        top_n = int((session_meta or {}).get("top_n") or PAIRWISE_ALTERNATIVE_LIMIT)
+        pairwise_limit = max(1, min(PAIRWISE_ALTERNATIVE_LIMIT, top_n))
+
+        if hard_filter_pass_count > pairwise_limit:
+            message = (
+                f"Session nay co {hard_filter_pass_count} laptop sau hard filter, vuot nguong so sanh cap AHP "
+                f"phuong an ({pairwise_limit}). Hay thu hep bo loc va chay lai de sinh ma tran."
+            )
+            reason_code = "too_many_candidates"
+        elif hard_filter_pass_count == 0:
+            message = "Khong co laptop nao vuot qua hard filter, nen khong the lap ma tran phuong an."
+            reason_code = "no_candidates_after_hard_filter"
+        else:
+            message = (
+                "Session nay chua co du lieu pairwise alternative AHP. Neu ban vua sua backend, hay restart Flask "
+                "va chay lai mot session moi de sinh ma tran."
+            )
+            reason_code = "missing_pairwise_scores"
+
+        return {
+            "session": {
+                "sessionKey": str(session_row["session_key"]),
+                "status": (session_meta or {}).get("status") or session_row["status"],
+                "topN": top_n,
+                "hardFilterPassCount": hard_filter_pass_count,
+            },
+            "criteria": [
+                {
+                    "id": x["id"],
+                    "code": x["code"],
+                    "name": x["name"],
+                    "sortOrder": x["sort_order"],
+                }
+                for x in criteria
+            ],
+            "alternatives": [],
+            "criterionTables": [],
+            "message": message,
+            "reasonCode": reason_code,
+        }
+
+    utilities_by_criterion = defaultdict(dict)
+    priorities_by_criterion = defaultdict(dict)
+    for row in score_rows:
+        utilities_by_criterion[row["criterion"]][row["laptop_id"]] = _float_or_none(row["raw_prediction"]) or 0.0
+        priorities_by_criterion[row["criterion"]][row["laptop_id"]] = _float_or_none(row["normalized_prediction"]) or 0.0
+
+    criterion_tables = []
+    for criterion in criteria:
+        criterion_code = criterion["code"]
+        pairwise = _build_alternative_pairwise_matrix(
+            candidate_rows=candidates,
+            criterion_code=criterion_code,
+            utilities_by_laptop=utilities_by_criterion.get(criterion_code, {}),
+        )
+
+        matrix_cells = []
+        for i, row_candidate in enumerate(candidates):
+            for j, col_candidate in enumerate(candidates):
+                matrix_cells.append({
+                    "rowLaptopId": row_candidate["laptop_id"],
+                    "rowLaptopName": row_candidate["laptop_name"],
+                    "colLaptopId": col_candidate["laptop_id"],
+                    "colLaptopName": col_candidate["laptop_name"],
+                    "value": pairwise["matrix"][i][j],
+                })
+
+        alternative_weights = []
+        for idx, candidate in enumerate(candidates):
+            laptop_id = candidate["laptop_id"]
+            alternative_weights.append({
+                "laptopId": laptop_id,
+                "laptopName": candidate["laptop_name"],
+                "brand": candidate["brand_name"],
+                "criterionUtility": utilities_by_criterion.get(criterion_code, {}).get(laptop_id, 0.0),
+                "alternativePriority": priorities_by_criterion.get(criterion_code, {}).get(laptop_id, pairwise["weights"][idx]),
+            })
+
+        criterion_tables.append({
+            "criterion": criterion_code,
+            "name": criterion["name"],
+            "candidateCount": len(candidates),
+            "pairwiseMatrix": matrix_cells,
+            "alternativeWeights": alternative_weights,
+            "consistency": {
+                "lambdaMax": _float_or_none(pairwise["summary"]["lambda_max"]),
+                "ci": _float_or_none(pairwise["summary"]["ci"]),
+                "ri": _float_or_none(pairwise["summary"]["ri"]),
+                "cr": _float_or_none(pairwise["summary"]["cr"]),
+                "isConsistent": pairwise["summary"]["is_consistent"],
+            },
+        })
+
+    return {
+        "session": {
+            "sessionKey": str(session_row["session_key"]),
+            "status": session_row["status"],
+        },
+        "criteria": [
+            {
+                "id": x["id"],
+                "code": x["code"],
+                "name": x["name"],
+                "sortOrder": x["sort_order"],
+            }
+            for x in criteria
+        ],
+        "alternatives": [
+            {
+                "laptopId": x["laptop_id"],
+                "laptopName": x["laptop_name"],
+                "brand": x["brand_name"],
+            }
+            for x in candidates
+        ],
+        "criterionTables": criterion_tables,
     }
 
 

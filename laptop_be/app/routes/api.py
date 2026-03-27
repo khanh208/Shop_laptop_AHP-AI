@@ -9,6 +9,7 @@ from app.services.recommendation_service import (
     run_full_pipeline,
     get_dashboard,
     get_ahp_by_session_key,
+    get_alternative_ahp_by_session_key,
     get_results_by_session_key,
     get_inference_trace_by_session_key,
     create_session_only,
@@ -97,6 +98,15 @@ def recommendation_dashboard(session_key):
 def recommendation_ahp(session_key):
     with db.engine.begin() as conn:
         data = get_ahp_by_session_key(conn, session_key)
+        if not data:
+            return jsonify({"message": "Không tìm thấy session"}), 404
+        return jsonify(data), 200
+
+
+@api_bp.get("/recommendations/<session_key>/alternative-ahp")
+def recommendation_alternative_ahp(session_key):
+    with db.engine.begin() as conn:
+        data = get_alternative_ahp_by_session_key(conn, session_key)
         if not data:
             return jsonify({"message": "Không tìm thấy session"}), 404
         return jsonify(data), 200

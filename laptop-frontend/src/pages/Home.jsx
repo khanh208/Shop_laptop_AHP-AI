@@ -19,6 +19,14 @@ import {
 
 const DEFAULT_MAX_BUDGET = 25000000;
 const DEFAULT_TOP_N = 10;
+const SCREEN_SIZE_OPTIONS = ['11.6', '12.5', '13.3', '14.0', '15.6', '16.0', '17.3'];
+const RAM_OPTIONS = ['8', '16', '32'];
+const SSD_OPTIONS_BY_RAM = {
+  default: ['256', '512', '1000'],
+  '8': ['256', '512'],
+  '16': ['512', '1000'],
+  '32': ['1000']
+};
 
 export default function Home() {
   const [options, setOptions] = useState({
@@ -87,6 +95,62 @@ export default function Home() {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
+
+  const getSsdOptions = (ramValue) => SSD_OPTIONS_BY_RAM[ramValue] || SSD_OPTIONS_BY_RAM.default;
+
+  const handleRamChange = (value) => {
+    const allowedSsdOptions = getSsdOptions(value);
+    updateForm((prev) => {
+      const nextSsd = prev.filters.minSsdGb && !allowedSsdOptions.includes(String(prev.filters.minSsdGb))
+        ? ''
+        : prev.filters.minSsdGb;
+
+      return {
+        ...prev,
+        filters: {
+          ...prev.filters,
+          minRamGb: value,
+          minSsdGb: nextSsd
+        }
+      };
+    });
+  };
+
+  const handleScreenMinChange = (value) => {
+    updateForm((prev) => {
+      const nextMax = prev.filters.screenSizeMax && value && Number(prev.filters.screenSizeMax) < Number(value)
+        ? value
+        : prev.filters.screenSizeMax;
+
+      return {
+        ...prev,
+        filters: {
+          ...prev.filters,
+          screenSizeMin: value,
+          screenSizeMax: nextMax
+        }
+      };
+    });
+  };
+
+  const handleScreenMaxChange = (value) => {
+    updateForm((prev) => {
+      const nextMin = prev.filters.screenSizeMin && value && Number(prev.filters.screenSizeMin) > Number(value)
+        ? value
+        : prev.filters.screenSizeMin;
+
+      return {
+        ...prev,
+        filters: {
+          ...prev.filters,
+          screenSizeMin: nextMin,
+          screenSizeMax: value
+        }
+      };
+    });
+  };
+
+  const availableSsdOptions = getSsdOptions(form.filters.minRamGb);
 
   const buildPayload = () => ({
     mode: form.mode,
@@ -363,13 +427,13 @@ export default function Home() {
                   </label>
                   <select
                     value={form.filters.minRamGb}
-                    onChange={(e) => updateFilter('minRamGb', e.target.value)}
+                    onChange={(e) => handleRamChange(e.target.value)}
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
                   >
                     <option value="">Để hệ thống tự chọn</option>
-                    <option value="8">8 GB</option>
-                    <option value="16">16 GB</option>
-                    <option value="32">32 GB</option>
+                    {RAM_OPTIONS.map((ram) => (
+                      <option key={ram} value={ram}>{ram} GB</option>
+                    ))}
                   </select>
                 </div>
 
@@ -383,11 +447,16 @@ export default function Home() {
                     onChange={(e) => updateFilter('minSsdGb', e.target.value)}
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
                   >
-                    <option value="">Không giới hạn</option>
-                    <option value="256">256 GB</option>
-                    <option value="512">512 GB</option>
-                    <option value="1000">1 TB</option>
+                    <option value="">Để hệ thống tự chọn</option>
+                    {availableSsdOptions.map((ssd) => (
+                      <option key={ssd} value={ssd}>
+                        {ssd === '1000' ? '1 TB' : `${ssd} GB`}
+                      </option>
+                    ))}
                   </select>
+                  <p className="text-xs text-slate-500 mt-2 leading-5">
+                    SSD được giới hạn theo mức RAM để tránh các tổ hợp lọc thiếu hợp lý.
+                  </p>
                 </div>
 
                 <div>
@@ -427,15 +496,16 @@ export default function Home() {
                     <Monitor size={17} className="text-violet-600" />
                     Màn hình từ (inch)
                   </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
+                  <select
                     value={form.filters.screenSizeMin}
-                    onChange={(e) => updateFilter('screenSizeMin', e.target.value)}
-                    placeholder="Ví dụ: 13.3"
+                    onChange={(e) => handleScreenMinChange(e.target.value)}
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  />
+                  >
+                    <option value="">Để hệ thống tự chọn</option>
+                    {SCREEN_SIZE_OPTIONS.map((size) => (
+                      <option key={`min-${size}`} value={size}>{size}"</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -443,15 +513,16 @@ export default function Home() {
                     <Monitor size={17} className="text-violet-600" />
                     Màn hình đến (inch)
                   </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
+                  <select
                     value={form.filters.screenSizeMax}
-                    onChange={(e) => updateFilter('screenSizeMax', e.target.value)}
-                    placeholder="Ví dụ: 14.0"
+                    onChange={(e) => handleScreenMaxChange(e.target.value)}
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  />
+                  >
+                    <option value="">Để hệ thống tự chọn</option>
+                    {SCREEN_SIZE_OPTIONS.map((size) => (
+                      <option key={`max-${size}`} value={size}>{size}"</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

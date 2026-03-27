@@ -45,11 +45,11 @@ const criterionLabelsMap = {
   cpu: 'CPU',
   gpu: 'GPU',
   ram: 'RAM',
-  screen: 'Man hinh',
-  weight: 'Trong luong',
+  screen: 'Màn hình',
+  weight: 'Trọng lượng',
   battery: 'Pin',
-  durability: 'Do ben',
-  upgradeability: 'Nang cap'
+  durability: 'Độ bền',
+  upgradeability: 'Nâng cấp'
 };
 
 const traceBadgeStyles = {
@@ -64,30 +64,46 @@ function MatrixTable({
   headers,
   rowHeaders,
   values,
-  cornerLabel = 'Tieu chi',
+  cornerLabel = 'Tiêu chí',
   valueClassName = 'text-slate-700',
-  decimals = 3
+  decimals = 3,
+  compact = false
 }) {
   if (!headers?.length || !rowHeaders?.length || !values?.length) {
     return null;
   }
 
+  const wrapperClass = compact
+    ? 'rounded-3xl border border-slate-200 bg-white p-4 md:p-5 shadow-sm'
+    : 'rounded-3xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm';
+  const tableClass = compact ? 'w-full min-w-max text-xs text-center bg-white' : 'w-full min-w-max text-sm text-center bg-white';
+  const cellClass = compact ? 'p-2.5 border-b border-slate-200 font-medium' : 'p-3 border-b border-slate-200 font-medium';
+  const headerCellClass = compact
+    ? 'p-2.5 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap'
+    : 'p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap';
+  const rowHeaderClass = compact
+    ? 'p-2.5 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap'
+    : 'p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap';
+  const cornerClass = compact
+    ? 'p-2.5 border-b border-r border-slate-200 text-slate-600 font-bold'
+    : 'p-3 border-b border-r border-slate-200 text-slate-600 font-bold';
+
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
+    <div className={wrapperClass}>
       <div className="mb-4">
         <h3 className="text-lg md:text-xl font-bold text-slate-900">{title}</h3>
         {caption ? <p className="text-sm text-slate-500 mt-1">{caption}</p> : null}
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-slate-200">
-        <table className="w-full min-w-max text-sm text-center bg-white">
+      <div className="overflow-auto rounded-2xl border border-slate-200 max-h-[70vh]">
+        <table className={tableClass}>
           <thead>
             <tr className="bg-slate-50">
-              <th className="p-3 border-b border-r border-slate-200 text-slate-600 font-bold">{cornerLabel}</th>
+              <th className={cornerClass}>{cornerLabel}</th>
               {headers.map((header) => (
                 <th
                   key={header}
-                  className="p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap"
+                  className={headerCellClass}
                 >
                   {header}
                 </th>
@@ -97,13 +113,13 @@ function MatrixTable({
           <tbody>
             {values.map((row, rowIndex) => (
               <tr key={rowHeaders[rowIndex]} className="hover:bg-slate-50">
-                <td className="p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap">
+                <td className={rowHeaderClass}>
                   {rowHeaders[rowIndex]}
                 </td>
                 {row.map((cell, cellIndex) => (
                   <td
                     key={`${rowHeaders[rowIndex]}-${headers[cellIndex]}`}
-                    className={`p-3 border-b border-slate-200 font-medium ${valueClassName}`}
+                    className={`${cellClass} ${valueClassName}`}
                   >
                     {formatValue(cell, decimals)}
                   </td>
@@ -129,7 +145,7 @@ function MatrixTable({
           criterionTables: [],
           message:
             err?.response?.data?.message ||
-            'Khong tai duoc du lieu ma tran phuong an. Hay kiem tra backend da restart va session nay duoc chay theo luong moi.',
+            'Không tải được dữ liệu ma trận phương án. Hãy kiểm tra backend đã restart và session này được chạy theo luồng mới.',
         },
       }))
     ])
@@ -180,6 +196,89 @@ function MatrixTable({
     );
   }, [alternativeTables, criteriaCodes]);
 
+  const alternativePriorityLookup = useMemo(
+    () =>
+      Object.fromEntries(
+        sortedAlternativeTables.map((table) => [
+          table.criterion,
+          Object.fromEntries(
+            (table.alternativeWeights || []).map((item) => [String(item.laptopId), Number(item.alternativePriority || 0)])
+          ),
+        ])
+      ),
+    [sortedAlternativeTables]
+  );
+
+  const alternativeSummaryRows = useMemo(() => {
+    const backendResultMap = Object.fromEntries((data?.results || []).map((item) => [String(item.laptopId), item]));
+
+    return alternatives.map((alternative, index) => {
+      const priorities = {};
+      const contributions = {};
+      let totalWeight = 0;
+
+      criteriaWeights.forEach((criterion) => {
+        const criterionCode = criterion.criterion;
+        const criterionWeight = Number(criterion.weight || 0);
+        const priority = alternativePriorityLookup[criterionCode]?.[String(alternative.laptopId)] ?? 0;
+        const contribution = priority * criterionWeight;
+
+        priorities[criterionCode] = priority;
+        contributions[criterionCode] = contribution;
+        totalWeight += contribution;
+      });
+
+      return {
+        alias: alternativeAliasMap[String(alternative.laptopId)] || `PA${index + 1}`,
+        laptopId: alternative.laptopId,
+        laptopName: alternative.laptopName,
+        brand: alternative.brand,
+        priorities,
+        contributions,
+        totalWeight,
+        matchPercent: backendResultMap[String(alternative.laptopId)]?.matchPercent ?? totalWeight * 100,
+      };
+    });
+  }, [alternatives, criteriaWeights, alternativePriorityLookup, alternativeAliasMap, data?.results]);
+
+  const finalRankingRows = useMemo(
+    () =>
+      [...alternativeSummaryRows]
+        .sort((a, b) => b.totalWeight - a.totalWeight || b.matchPercent - a.matchPercent || a.alias.localeCompare(b.alias))
+        .map((item, index) => ({
+          ...item,
+          rank: index + 1,
+        })),
+    [alternativeSummaryRows]
+  );
+
+  const alternativeCriteriaOverview = useMemo(
+    () =>
+      sortedAlternativeTables.map((table) => ({
+        criterion: table.criterion,
+        name: table.name,
+        weight: Number(criterionWeightMap[table.criterion] || 0),
+        cr: Number(table.consistency?.cr ?? 0),
+      })),
+    [sortedAlternativeTables, criterionWeightMap]
+  );
+
+  const alternativePriorityMatrix = useMemo(
+    () =>
+      alternativeSummaryRows.map((row) =>
+        criteriaWeights.map((criterion) => Number(row.priorities[criterion.criterion] || 0))
+      ),
+    [alternativeSummaryRows, criteriaWeights]
+  );
+
+  const alternativeContributionMatrix = useMemo(
+    () =>
+      alternativeSummaryRows.map((row) =>
+        criteriaWeights.map((criterion) => Number(row.contributions[criterion.criterion] || 0))
+      ),
+    [alternativeSummaryRows, criteriaWeights]
+  );
+
   const selectedLaptopScores = useMemo(() => {
     if (!selectedLaptop?.criteriaScores) return [];
 
@@ -201,7 +300,7 @@ function MatrixTable({
       <div className="w-full min-h-screen bg-slate-100 flex items-center justify-center px-6">
         <div className="flex items-center gap-3 text-xl md:text-2xl font-bold text-sky-700 animate-pulse">
           <Zap className="animate-bounce" />
-          LOADING ANALYSIS DASHBOARD...
+          Đang tải bảng phân tích...
         </div>
       </div>
     );
@@ -241,10 +340,10 @@ function MatrixTable({
 
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
                   <p className="text-xs md:text-sm text-slate-500 font-semibold uppercase tracking-wide mb-2">
-                    Còn lại để AHP
+                    AI shortlist
                   </p>
                   <p className="text-2xl md:text-3xl font-extrabold text-emerald-600">
-                    {data.session?.hardFilterPassCount ?? 0}
+                    {data.session?.aiShortlistCount ?? data.session?.hardFilterPassCount ?? 0}
                   </p>
                 </div>
               </div>
@@ -277,9 +376,9 @@ function MatrixTable({
                 <Cpu size={20} />
               </div>
               <div>
-                <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Buoc 1. Ma tran tieu chi va trong so AHP</h2>
+                <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Bước 1. Ma trận tiêu chí và trọng số AHP</h2>
                 <p className="text-sm md:text-base text-slate-500">
-                  He thong so sanh cap 8 tieu chi de tinh trong so dung cho quyet dinh cuoi cung.
+                  Hệ thống so sánh cặp 8 tiêu chí để tính trọng số dùng cho quyết định cuối cùng.
                 </p>
               </div>
             </div>
@@ -287,25 +386,27 @@ function MatrixTable({
             <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.9fr] gap-6">
               <div className="space-y-6">
                 <MatrixTable
-                  title="Ma tran so sanh cap tieu chi"
-                  caption="Gia tri lon hon 1 cho biet tieu chi theo hang duoc uu tien hon tieu chi theo cot."
+                  title="Ma trận so sánh cặp tiêu chí"
+                  caption="Giá trị lớn hơn 1 cho biết tiêu chí theo hàng được ưu tiên hơn tiêu chí theo cột."
                   headers={matrixLabels}
                   rowHeaders={matrixLabels}
                   values={criteriaMatrix}
-                  cornerLabel="Tieu chi"
+                  cornerLabel="Tiêu chí"
                   valueClassName="text-sky-700"
                   decimals={2}
+                  compact
                 />
 
                 <MatrixTable
-                  title="Ma tran chuan hoa tieu chi"
-                  caption="Sau khi chuan hoa, moi cot duoc dua ve cung mot thang de tinh vector uu tien."
+                  title="Ma trận chuẩn hóa tiêu chí"
+                  caption="Sau khi chuẩn hóa, mỗi cột được đưa về cùng một thang để tính vector ưu tiên."
                   headers={matrixLabels}
                   rowHeaders={matrixLabels}
                   values={normalizedMatrix}
-                  cornerLabel="Tieu chi"
+                  cornerLabel="Tiêu chí"
                   valueClassName="text-emerald-600"
                   decimals={3}
+                  compact
                 />
               </div>
 
@@ -316,8 +417,8 @@ function MatrixTable({
                       <Cpu size={20} />
                     </div>
                     <div>
-                      <h3 className="text-xl font-bold text-slate-900">Trong so tieu chi</h3>
-                      <p className="text-sm text-slate-500">Ket qua vector uu tien sau AHP</p>
+                      <h3 className="text-xl font-bold text-slate-900">Trọng số tiêu chí</h3>
+                      <p className="text-sm text-slate-500">Kết quả vector ưu tiên sau AHP</p>
                     </div>
                   </div>
 
@@ -354,7 +455,7 @@ function MatrixTable({
                 </section>
 
                 <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                  <h3 className="text-lg md:text-xl font-bold text-slate-900 mb-4">Do nhat quan ma tran tieu chi</h3>
+                  <h3 className="text-lg md:text-xl font-bold text-slate-900 mb-4">Độ nhất quán ma trận tiêu chí</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
                       <p className="text-sm text-slate-500 mb-1">CI</p>
@@ -371,7 +472,7 @@ function MatrixTable({
                     </div>
                   </div>
                   <p className="text-sm text-slate-500 mt-4 leading-6">
-                    CR &lt; 0.1 cho thay ma tran tieu chi dat muc nhat quan chap nhan duoc.
+                    CR &lt; 0.1 cho thấy ma trận tiêu chí đạt mức nhất quán chấp nhận được.
                   </p>
                 </section>
               </div>
@@ -384,9 +485,9 @@ function MatrixTable({
                 <Activity size={20} />
               </div>
               <div>
-                <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Buoc 2. Ma tran phuong an theo tung tieu chi</h2>
+                <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Bước 2. Ma trận phương án theo từng tiêu chí</h2>
                 <p className="text-sm md:text-base text-slate-500">
-                  Sau hard filter, moi laptop duoc dua vao 8 ma tran so sanh cap phuong an de tim uu tien theo tung tieu chi.
+                  Sau hard filter, AI sẽ chấm điểm sơ bộ để chọn ra nhóm phương án tiêu biểu, rồi chỉ nhóm này mới đi vào 8 ma trận so sánh cặp phương án.
                 </p>
               </div>
             </div>
@@ -394,11 +495,13 @@ function MatrixTable({
             <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-7">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
                 <div>
-                  <h3 className="text-lg md:text-xl font-bold text-slate-900">Danh sach phuong an sau hard filter</h3>
-                  <p className="text-sm text-slate-500">Ky hieu PA1, PA2... duoc dung trong tat ca ma tran o ben duoi.</p>
+                  <h3 className="text-lg md:text-xl font-bold text-slate-900">Danh sách phương án sau AI shortlist</h3>
+                  <p className="text-sm text-slate-500">
+                    AI sơ bộ đã rút gọn từ {data.session?.hardFilterPassCount ?? 0} máy còn {alternatives.length} phương án tiêu biểu. Ký hiệu PA1, PA2... được dùng trong tất cả ma trận ở bên dưới.
+                  </p>
                 </div>
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                  <span className="text-sm text-slate-500">So phuong an dang so sanh: </span>
+                  <span className="text-sm text-slate-500">Số phương án AI chọn: </span>
                   <span className="text-lg font-bold text-slate-900">{alternatives.length}</span>
                 </div>
               </div>
@@ -410,109 +513,59 @@ function MatrixTable({
                       PA{index + 1}
                     </div>
                     <h4 className="font-bold text-slate-900 leading-6">{item.laptopName}</h4>
-                    <p className="text-sm text-slate-500 mt-2">{item.brand || 'Khong ro thuong hieu'}</p>
+                    <p className="text-sm text-slate-500 mt-2">{item.brand || 'Không rõ thương hiệu'}</p>
                   </div>
                 ))}
               </div>
             </section>
 
             {sortedAlternativeTables.length > 0 ? (
-              <div className="space-y-6">
-                {sortedAlternativeTables.map((table) => {
-                  const alternativeIds = table.alternativeWeights?.map((item) => item.laptopId) || [];
-                  const headers = alternativeIds.map((id) => alternativeAliasMap[String(id)] || String(id));
-                  const rowHeaders = headers;
-                  const matrixValues = buildSquareMatrix(
-                    table.pairwiseMatrix || [],
-                    alternativeIds,
-                    'rowLaptopId',
-                    'colLaptopId',
-                    'value'
-                  );
+              <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-7 space-y-6">
+                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                  <div>
+                    <h3 className="text-xl md:text-2xl font-bold text-slate-900">Chi tiết 8 ma trận phương án</h3>
+                    <p className="text-sm md:text-base text-slate-500 mt-2 max-w-3xl">
+                      Cụm ma trận này đã được tách sang một trang riêng để dashboard chính gọn hơn và thao tác nhanh hơn.
+                    </p>
+                  </div>
 
-                  return (
-                    <section key={table.criterion} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-7 space-y-6">
-                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                        <div>
-                          <div className="inline-flex items-center gap-2 rounded-full bg-fuchsia-50 text-fuchsia-700 px-3 py-1 text-xs font-semibold uppercase tracking-wider mb-3">
-                            {criterionLabelsMap[table.criterion] || table.name}
-                          </div>
-                          <h3 className="text-xl md:text-2xl font-bold text-slate-900">{table.name}</h3>
-                          <p className="text-sm md:text-base text-slate-500 mt-2 max-w-3xl">
-                            Ma tran nay so sanh tung cap laptop theo tieu chi "{table.name}" de rut ra trong so phuong an.
+                  <button
+                    onClick={() => navigate(`/dashboard/${sessionKey}/alternatives`)}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white px-5 py-3 font-semibold transition"
+                  >
+                    Mở trang ma trận phương án
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {alternativeCriteriaOverview.map((item) => (
+                    <div key={item.criterion} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="inline-flex items-center gap-2 rounded-full bg-fuchsia-50 text-fuchsia-700 px-3 py-1 text-xs font-semibold uppercase tracking-wide mb-3">
+                        {criterionLabelsMap[item.criterion] || item.name}
+                      </div>
+                      <h4 className="font-bold text-slate-900">{item.name}</h4>
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                          <p className="text-xs text-slate-500 mb-1">Trọng số</p>
+                          <p className="text-lg font-extrabold text-sky-700">{(item.weight * 100).toFixed(1)}%</p>
+                        </div>
+                        <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                          <p className="text-xs text-slate-500 mb-1">CR</p>
+                          <p className={`text-lg font-extrabold ${item.cr < 0.1 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {formatValue(item.cr, 3)}
                           </p>
                         </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-full xl:min-w-[320px] xl:max-w-[420px]">
-                          <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
-                            <p className="text-sm text-slate-500 mb-1">Trong so tieu chi</p>
-                            <p className="text-2xl font-extrabold text-sky-700">
-                              {((criterionWeightMap[table.criterion] || 0) * 100).toFixed(1)}%
-                            </p>
-                          </div>
-                          <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
-                            <p className="text-sm text-slate-500 mb-1">CR phuong an</p>
-                            <p className={`text-2xl font-extrabold ${(table.consistency?.cr ?? 1) < 0.1 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              {table.consistency?.cr != null ? formatValue(table.consistency?.cr, 3) : '-'}
-                            </p>
-                          </div>
-                        </div>
                       </div>
-
-                      <MatrixTable
-                        title={`Ma tran so sanh cap phuong an - ${table.name}`}
-                        caption="Moi o trong ma tran the hien muc uu tien tuong doi cua laptop theo tieu chi dang xet."
-                        headers={headers}
-                        rowHeaders={rowHeaders}
-                        values={matrixValues}
-                        cornerLabel="Phuong an"
-                        valueClassName="text-fuchsia-700"
-                        decimals={2}
-                      />
-
-                      <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 md:p-6">
-                        <h4 className="text-lg font-bold text-slate-900 mb-4">Trong so phuong an theo tieu chi</h4>
-                        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-                          <table className="w-full min-w-max text-sm">
-                            <thead>
-                              <tr className="bg-slate-50 text-slate-600">
-                                <th className="p-3 border-b border-slate-200 text-left font-bold">PA</th>
-                                <th className="p-3 border-b border-slate-200 text-left font-bold">Laptop</th>
-                                <th className="p-3 border-b border-slate-200 text-right font-bold">Diem tieu chi</th>
-                                <th className="p-3 border-b border-slate-200 text-right font-bold">Trong so PA</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {table.alternativeWeights?.map((item) => (
-                                <tr key={`${table.criterion}-${item.laptopId}`} className="hover:bg-slate-50">
-                                  <td className="p-3 border-b border-slate-200 font-semibold text-slate-700 whitespace-nowrap">
-                                    {alternativeAliasMap[String(item.laptopId)] || item.laptopId}
-                                  </td>
-                                  <td className="p-3 border-b border-slate-200 text-slate-700">
-                                    <div className="font-semibold">{item.laptopName}</div>
-                                    <div className="text-xs text-slate-500 mt-1">{item.brand || 'Khong ro thuong hieu'}</div>
-                                  </td>
-                                  <td className="p-3 border-b border-slate-200 text-right text-slate-700 font-medium">
-                                    {formatValue(item.criterionUtility, 2)}
-                                  </td>
-                                  <td className="p-3 border-b border-slate-200 text-right font-bold text-fuchsia-700">
-                                    {formatValue(item.alternativePriority, 4)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
             ) : (
               <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
-                <p className="font-semibold mb-2">Chua co du lieu ma tran phuong an.</p>
+                <p className="font-semibold mb-2">Chưa có dữ liệu ma trận phương án.</p>
                 <p className="leading-7">
-                  {alternativeAHPMessage || 'Hay kiem tra session nay da duoc chay theo luong AHP moi va backend da duoc restart.'}
+                  {alternativeAHPMessage || 'Hãy kiểm tra session này đã được chạy theo luồng AHP mới và backend đã được restart.'}
                 </p>
               </div>
             )}
@@ -577,12 +630,12 @@ function MatrixTable({
                             <span className="text-sm font-semibold text-amber-700">+{formatValue(item.scoreDelta, 1)}</span>
                           </div>
                           <p className="text-sm md:text-base text-slate-600 leading-6">{item.explanation}</p>
-                          <p className="text-xs text-slate-400 mt-2">Diem sau buoc nay: {formatValue(item.finalScoreAfter, 1)}</p>
+                          <p className="text-xs text-slate-400 mt-2">Điểm sau bước này: {formatValue(item.finalScoreAfter, 1)}</p>
                         </div>
                       ))
                     ) : (
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-slate-500">
-                        Khong co du lieu suy luan uu tien.
+                        Không có dữ liệu suy luận ưu tiên.
                       </div>
                     )}
                   </div>
@@ -599,6 +652,103 @@ function MatrixTable({
                     <p className="text-sm md:text-base text-slate-500">Danh sách laptop phù hợp nhất sau khi tổng hợp ma trận tiêu chí và ma trận phương án</p>
                   </div>
                 </div>
+
+                {alternativeSummaryRows.length > 0 && criteriaWeights.length > 0 && (
+                  <div className="space-y-6 mb-6">
+                    <div>
+                      <h3 className="text-xl md:text-2xl font-bold text-slate-900">Bảng tổng hợp quyết định AHP</h3>
+                      <p className="text-sm md:text-base text-slate-500 mt-2">
+                        Từ 8 ma trận phương án theo từng tiêu chí, hệ thống rút ra trọng số PA, nhân với trọng số tiêu chí và
+                        tổng hợp thành trọng số cuối cùng để chọn laptop top 1.
+                      </p>
+                    </div>
+
+                    <MatrixTable
+                      title="Trọng số các PA theo từng tiêu chí"
+                      caption="Mỗi ô là trọng số phương án rút ra từ ma trận so sánh cặp của tiêu chí tương ứng."
+                      headers={matrixLabels}
+                      rowHeaders={alternativeSummaryRows.map((row) => row.alias)}
+                      values={alternativePriorityMatrix}
+                      cornerLabel="Phương án"
+                      valueClassName="text-sky-700"
+                      decimals={4}
+                      compact
+                    />
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[1.6fr_0.95fr] gap-6">
+                      <MatrixTable
+                        title="Điểm số các PA = Trọng số PA theo tiêu chí × Trọng số tiêu chí"
+                        caption="Bảng này cho thấy đóng góp của từng tiêu chí vào điểm cuối của từng phương án."
+                        headers={matrixLabels}
+                        rowHeaders={alternativeSummaryRows.map((row) => row.alias)}
+                        values={alternativeContributionMatrix}
+                        cornerLabel="Phương án"
+                        valueClassName="text-rose-600"
+                        decimals={4}
+                        compact
+                      />
+
+                      <div className="space-y-6">
+                        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 md:p-6">
+                          <h4 className="text-lg font-bold text-slate-900 mb-4">Trọng số của tiêu chí</h4>
+                          <div className="overflow-auto rounded-2xl border border-slate-200 bg-white max-h-[50vh]">
+                            <table className="w-full min-w-max text-sm">
+                              <thead>
+                                <tr className="bg-slate-50 text-slate-600">
+                                  <th className="p-3 border-b border-slate-200 text-left font-bold">Tiêu chí</th>
+                                  <th className="p-3 border-b border-slate-200 text-right font-bold">Trọng số</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {criteriaWeights.map((criterion) => (
+                                  <tr key={criterion.criterion} className="hover:bg-slate-50">
+                                    <td className="p-3 border-b border-slate-200 font-semibold text-slate-700">
+                                      {criterion.name}
+                                    </td>
+                                    <td className="p-3 border-b border-slate-200 text-right font-bold text-sky-700">
+                                      {formatValue(criterion.weight, 4)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 md:p-6">
+                          <h4 className="text-lg font-bold text-slate-900 mb-4">Điểm số các PA</h4>
+                          <div className="overflow-auto rounded-2xl border border-slate-200 bg-white max-h-[50vh]">
+                            <table className="w-full min-w-max text-sm">
+                              <thead>
+                                <tr className="bg-slate-50 text-slate-600">
+                                  <th className="p-3 border-b border-slate-200 text-left font-bold">Phương án</th>
+                                  <th className="p-3 border-b border-slate-200 text-right font-bold">Trọng số</th>
+                                  <th className="p-3 border-b border-slate-200 text-right font-bold">Độ phù hợp</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {finalRankingRows.map((row) => (
+                                  <tr key={row.laptopId} className="hover:bg-slate-50">
+                                    <td className="p-3 border-b border-slate-200 font-semibold text-slate-700">
+                                      <div>{row.alias}</div>
+                                      <div className="text-xs text-slate-500 mt-1">{row.laptopName}</div>
+                                    </td>
+                                    <td className="p-3 border-b border-slate-200 text-right font-bold text-rose-600">
+                                      {formatValue(row.totalWeight, 4)}
+                                    </td>
+                                    <td className="p-3 border-b border-slate-200 text-right font-bold text-slate-900">
+                                      {formatValue(row.matchPercent, 2)}%
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {!data.results || data.results.length === 0 ? (
                   <div className="rounded-3xl border border-rose-200 bg-rose-50 p-8 md:p-10 text-center">
@@ -685,6 +835,7 @@ function MatrixTable({
                   </div>
                 )}
               </section>
+
             </div>
 
             <div className="xl:col-span-4">
@@ -692,138 +843,84 @@ function MatrixTable({
                 <div>
                   <div className="flex items-center gap-3 mb-5">
                     <div className="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
-                      <Cpu size={20} />
+                      <Activity size={20} />
                     </div>
                     <div>
-                      <h3 className="text-xl font-bold text-slate-900">Tóm tắt trọng số tiêu chí</h3>
-                      <p className="text-sm text-slate-500">Phần ma trận chi tiết đã được đưa lên phía trên</p>
+                      <h3 className="text-xl font-bold text-slate-900">Điều hướng nhanh</h3>
+                      <p className="text-sm text-slate-500">Bỏ phần trùng lặp, giữ lại các thao tác chính để xem kết quả nhanh hơn.</p>
                     </div>
                   </div>
 
-                  <div className="space-y-5">
-                    {data.ahp?.weights?.map((w) => (
-                      <div key={w.criterion} className="group relative">
-                        <div className="flex items-center justify-between gap-3 mb-2">
-                          <div className="flex items-center gap-1.5 text-sm md:text-base font-semibold text-slate-700">
-                            {w.name}
-                            <Info size={14} className="text-slate-400 group-hover:text-sky-600 transition-colors" />
-                          </div>
-                          <div className="text-sm md:text-base font-bold text-sky-700">
-                            {((w.weight || 0) * 100).toFixed(1)}%
-                          </div>
-                        </div>
-
-                        <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-indigo-500 to-sky-500 rounded-full"
-                            style={{ width: `${(w.weight || 0) * 100}%` }}
-                          />
-                        </div>
-
-                        {w.explanation && (
-                          <div className="absolute left-0 bottom-full mb-2 w-full rounded-2xl bg-slate-900 text-white text-sm p-3 shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition z-20">
-                            {w.explanation}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
+                      <p className="text-sm text-slate-500 mb-1">AI shortlist</p>
+                      <p className="text-2xl font-extrabold text-emerald-600">
+                        {data.session?.aiShortlistCount ?? alternatives.length}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4">
+                      <p className="text-sm text-slate-500 mb-1">Top 1 hiện tại</p>
+                      <p className="text-lg font-extrabold text-rose-600">
+                        {finalRankingRows[0]?.alias || '-'}
+                      </p>
+                    </div>
                   </div>
+                </div>
+
+                <div className="border-t border-slate-200 pt-6 space-y-4">
+                  <button
+                    onClick={() => navigate(`/dashboard/${sessionKey}/alternatives`)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-semibold transition"
+                  >
+                    Xem trang ma trận phương án
+                    <ChevronRight size={18} />
+                  </button>
+
+                  <button
+                    onClick={() => setShowMatrixModal(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-sky-50 hover:bg-sky-100 text-sky-700 font-semibold transition"
+                  >
+                    <Maximize2 size={18} />
+                    Mở ma trận tiêu chí
+                  </button>
+
+                  <button
+                    onClick={() => navigate('/')}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+                  >
+                    Quay lại bộ lọc
+                  </button>
                 </div>
 
                 <div className="border-t border-slate-200 pt-6">
-                  <h4 className="text-base font-bold text-slate-900 mb-4">Chỉ số nhất quán</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
-                      <p className="text-sm text-slate-500 mb-1">CI</p>
-                      <p className="text-xl font-bold text-slate-900">
-                        {data.ahp?.consistency?.ci?.toFixed(3) ?? '-'}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
-                      <p className="text-sm text-slate-500 mb-1">CR</p>
-                      <p className={`text-xl font-bold ${(data.ahp?.consistency?.cr ?? 1) < 0.1 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {data.ahp?.consistency?.cr?.toFixed(3) ?? '-'}
-                      </p>
-                    </div>
+                  <h4 className="text-base font-bold text-slate-900 mb-4">Công thức tổng hợp</h4>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 leading-7">
+                    Điểm PA cuối = tổng của
+                    <br />
+                    <span className="font-semibold text-slate-900">
+                      Trọng số PA theo từng tiêu chí × Trọng số của tiêu chí
+                    </span>
                   </div>
                 </div>
 
-                {criteriaMatrix.length > 0 && matrixLabels.length > 0 && (
+                {finalRankingRows.length > 0 && (
                   <div className="border-t border-slate-200 pt-6">
-                    <div className="flex items-center justify-between gap-3 mb-4">
-                      <h4 className="text-base font-bold text-slate-900">Ma trận so sánh cặp</h4>
-                      <button
-                        onClick={() => setShowMatrixModal(true)}
-                        className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 text-sm font-semibold transition"
-                      >
-                        <Maximize2 size={16} />
-                        Mở rộng
-                      </button>
-                    </div>
-
-                    <div className="overflow-x-auto rounded-2xl border border-slate-200">
-                      <table className="w-full text-sm text-center bg-white">
-                        <thead>
-                          <tr className="bg-slate-50">
-                            <th className="p-3 border-b border-r border-slate-200 text-slate-600 font-bold">Tiêu chí</th>
-                            {matrixLabels.map((l) => (
-                              <th key={l} className="p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap">
-                                {l}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {criteriaMatrix.map((row, i) => (
-                            <tr key={i} className="hover:bg-slate-50">
-                              <td className="p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap">
-                                {matrixLabels[i]}
-                              </td>
-                              {row.map((val, j) => (
-                                <td key={j} className="p-3 border-b border-slate-200 text-sky-700 font-medium">
-                                  {Number.isInteger(val) ? val : Number(val).toFixed(2)}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {normalizedMatrix.length > 0 && matrixLabels.length > 0 && (
-                  <div className="border-t border-slate-200 pt-6">
-                    <h4 className="text-base font-bold text-slate-900 mb-4">Ma trận chuẩn hóa</h4>
-
-                    <div className="overflow-x-auto rounded-2xl border border-slate-200">
-                      <table className="w-full text-sm text-center bg-white">
-                        <thead>
-                          <tr className="bg-slate-50">
-                            <th className="p-3 border-b border-r border-slate-200 text-slate-600 font-bold">Tiêu chí</th>
-                            {matrixLabels.map((l) => (
-                              <th key={l} className="p-3 border-b border-slate-200 text-slate-600 font-bold whitespace-nowrap">
-                                {l}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {normalizedMatrix.map((row, i) => (
-                            <tr key={i} className="hover:bg-slate-50">
-                              <td className="p-3 border-b border-r border-slate-200 text-left font-semibold text-slate-700 whitespace-nowrap">
-                                {matrixLabels[i]}
-                              </td>
-                              {row.map((val, j) => (
-                                <td key={j} className="p-3 border-b border-slate-200 text-emerald-600 font-medium">
-                                  {Number.isInteger(val) ? val : Number(val).toFixed(3)}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <h4 className="text-base font-bold text-slate-900 mb-4">Top 3 hiện tại</h4>
+                    <div className="space-y-3">
+                      {finalRankingRows.slice(0, 3).map((row) => (
+                        <div key={row.laptopId} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold text-slate-900">{row.alias}</p>
+                              <p className="text-xs text-slate-500 mt-1 line-clamp-2">{row.laptopName}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-bold text-rose-600">{formatValue(row.matchPercent, 2)}%</p>
+                              <p className="text-xs text-slate-500">Trọng số {formatValue(row.totalWeight, 4)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -929,7 +1026,7 @@ function MatrixTable({
                                 {item.label}
                               </span>
                               <span className="ml-2 text-xs text-slate-400">
-                                Trong so tieu chi: {(item.weight * 100).toFixed(1)}%
+                                Trọng số tiêu chí: {(item.weight * 100).toFixed(1)}%
                               </span>
                             </div>
                             <span className="text-sm md:text-base font-bold text-slate-900">

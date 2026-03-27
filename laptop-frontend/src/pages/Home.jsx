@@ -21,11 +21,13 @@ const DEFAULT_MAX_BUDGET = 25000000;
 const DEFAULT_TOP_N = 10;
 const SCREEN_SIZE_OPTIONS = ['11.6', '12.5', '13.3', '14.0', '15.6', '16.0', '17.3'];
 const RAM_OPTIONS = ['8', '16', '32'];
+const WEIGHT_OPTIONS = ['1.2', '1.4', '1.6', '1.8', '2.0', '2.2', '2.5', '3.0'];
+const BATTERY_OPTIONS = ['4', '5', '6', '8', '10'];
 const SSD_OPTIONS_BY_RAM = {
   default: ['256', '512', '1000'],
   '8': ['256', '512'],
-  '16': ['512', '1000'],
-  '32': ['1000']
+  '16': ['256', '512', '1000'],
+  '32': ['512', '1000']
 };
 
 export default function Home() {
@@ -151,6 +153,32 @@ export default function Home() {
   };
 
   const availableSsdOptions = getSsdOptions(form.filters.minRamGb);
+  const validateForm = () => {
+    const weight = normalizeNumber(form.filters.maxWeightKg);
+    const battery = normalizeNumber(form.filters.minBatteryHours);
+    const screenMin = normalizeNumber(form.filters.screenSizeMin);
+    const screenMax = normalizeNumber(form.filters.screenSizeMax);
+    const ram = normalizeNumber(form.filters.minRamGb);
+    const ssd = normalizeNumber(form.filters.minSsdGb);
+
+    if (weight !== null && (weight < 1 || weight > 3.5)) {
+      return 'Vui lòng chọn cân nặng tối đa trong khoảng thực tế từ 1.0kg đến 3.5kg.';
+    }
+
+    if (battery !== null && (battery < 4 || battery > 12)) {
+      return 'Vui lòng chọn thời lượng pin tối thiểu trong khoảng hợp lý từ 4 đến 12 giờ.';
+    }
+
+    if (screenMin !== null && screenMax !== null && screenMin > screenMax) {
+      return 'Kích thước màn hình "từ" không được lớn hơn kích thước màn hình "đến".';
+    }
+
+    if (ram === 8 && ssd === 1000) {
+      return 'Tổ hợp 8GB RAM và SSD 1TB đang bị khóa vì không phù hợp với cách lọc hiện tại.';
+    }
+
+    return '';
+  };
 
   const buildPayload = () => ({
     mode: form.mode,
@@ -177,8 +205,15 @@ export default function Home() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
     setSubmitError('');
+
+    const validationMessage = validateForm();
+    if (validationMessage) {
+      setSubmitError(validationMessage);
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const res = await runRecommendation(buildPayload());
@@ -217,7 +252,7 @@ export default function Home() {
                 </h1>
 
                 <p className="mt-4 text-sm md:text-base text-white/90 leading-7 max-w-2xl">
-                  Chọn nhóm ngành, siết bộ lọc kỹ thuật và để hệ thống AHP so sánh cặp các phương án còn lại trước khi xếp hạng laptop phù hợp nhất.
+                  Chọn nhóm ngành và điều kiện kỹ thuật, hệ thống sẽ hard filter trước, dùng AI chấm sơ bộ để lấy nhóm laptop tiêu biểu, rồi mới chạy AHP so sánh cặp và xếp hạng kết quả cuối.
                 </p>
               </div>
 
@@ -416,7 +451,7 @@ export default function Home() {
                 Điều kiện kỹ thuật chi tiết
               </h2>
               <p className="text-sm text-slate-600 mb-6">
-                Hãy siết bộ lọc đến khi số laptop còn lại đủ nhỏ để AHP so sánh cặp phương án. Để trống ô nào thì hệ thống sẽ dùng mặc định theo nhóm ngành.
+                Hệ thống sẽ hard filter trước, sau đó AI tự chấm điểm sơ bộ để rút gọn còn nhóm phương án tiêu biểu cho bước AHP. Để trống ô nào thì hệ thống sẽ dùng mặc định theo nhóm ngành.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -455,7 +490,7 @@ export default function Home() {
                     ))}
                   </select>
                   <p className="text-xs text-slate-500 mt-2 leading-5">
-                    SSD được giới hạn theo mức RAM để tránh các tổ hợp lọc thiếu hợp lý.
+                    SSD được gợi ý theo mức RAM. 256GB vẫn có ở các mức RAM phù hợp, còn 1TB sẽ bị ẩn nếu bạn chỉ chọn 8GB RAM.
                   </p>
                 </div>
 
@@ -464,15 +499,19 @@ export default function Home() {
                     <Scale size={17} className="text-violet-600" />
                     Cân nặng tối đa (kg)
                   </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
+                  <select
                     value={form.filters.maxWeightKg}
                     onChange={(e) => updateFilter('maxWeightKg', e.target.value)}
-                    placeholder="Ví dụ: 1.6"
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  />
+                  >
+                    <option value="">Để hệ thống tự chọn</option>
+                    {WEIGHT_OPTIONS.map((weight) => (
+                      <option key={weight} value={weight}>{weight} kg</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500 mt-2 leading-5">
+                    Chỉ hiển thị các mức cân nặng thực tế để tránh lọc kiểu 0.5kg không khả thi.
+                  </p>
                 </div>
 
                 <div>
@@ -480,15 +519,19 @@ export default function Home() {
                     <BatteryCharging size={17} className="text-violet-600" />
                     Pin tối thiểu (giờ)
                   </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
+                  <select
                     value={form.filters.minBatteryHours}
                     onChange={(e) => updateFilter('minBatteryHours', e.target.value)}
-                    placeholder="Ví dụ: 6"
                     className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  />
+                  >
+                    <option value="">Để hệ thống tự chọn</option>
+                    {BATTERY_OPTIONS.map((hours) => (
+                      <option key={hours} value={hours}>{hours} giờ</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500 mt-2 leading-5">
+                    Chỉ hiển thị các mốc pin phổ biến để tránh chọn các giá trị thiếu thực tế.
+                  </p>
                 </div>
 
                 <div>
@@ -525,39 +568,6 @@ export default function Home() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-3">
-                    <Zap size={17} className="text-violet-600" />
-                    CPU tham chiếu
-                  </label>
-                  <select
-                    value={form.filters.cpuCode || ''}
-                    onChange={(e) => updateFilter('cpuCode', e.target.value || null)}
-                    className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  >
-                    <option value="">Không ép CPU cụ thể</option>
-                    {options.cpuReferences.map((cpu) => (
-                      <option key={cpu.code} value={cpu.code}>{cpu.display_name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-3">
-                    <LayoutGrid size={17} className="text-violet-600" />
-                    GPU tham chiếu
-                  </label>
-                  <select
-                    value={form.filters.gpuCode || ''}
-                    onChange={(e) => updateFilter('gpuCode', e.target.value || null)}
-                    className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-4 text-base text-slate-900 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 transition"
-                  >
-                    <option value="">Không ép GPU cụ thể</option>
-                    {options.gpuReferences.map((gpu) => (
-                      <option key={gpu.code} value={gpu.code}>{gpu.display_name}</option>
-                    ))}
-                  </select>
-                </div>
               </div>
             </section>
 

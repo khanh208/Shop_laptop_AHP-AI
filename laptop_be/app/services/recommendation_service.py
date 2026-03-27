@@ -880,12 +880,6 @@ def ai_score_candidates(conn, session_id):
     if not candidates:
         raise ValueError("Không có candidate pass hard filter để so sánh cặp phương án")
 
-    if len(candidates) > pairwise_limit:
-        raise ValueError(
-            f"Số laptop sau hard filter là {len(candidates)}, vượt ngưỡng so sánh cặp AHP phương án ({pairwise_limit}). "
-            f"Hãy siết thêm bộ lọc để còn tối đa {pairwise_limit} máy."
-        )
-
     criteria = _fetch_all(conn, """
         SELECT id, code
         FROM recommendation_criteria
@@ -893,8 +887,20 @@ def ai_score_candidates(conn, session_id):
         ORDER BY sort_order
     """)
 
+    criterion_weight_rows = _fetch_all(conn, """
+        SELECT rc.code, ew.normalized_weight
+        FROM evaluation_weights ew
+        JOIN recommendation_criteria rc ON rc.id = ew.criterion_id
+        WHERE ew.evaluation_session_id = :sid
+    """, {"sid": session_id})
+    criterion_weights = {
+        row["code"]: float(row["normalized_weight"] or 0.0)
+        for row in criterion_weight_rows
+    }
+
     criterion_utilities = {}
     candidate_features = {}
+    candidate_preselection = []
     for c in candidates:
         feature_map, feature_sources, missing_features = _build_feature_map(c)
         candidate_features[c["laptop_id"]] = {
@@ -903,26 +909,61 @@ def ai_score_candidates(conn, session_id):
             "missingFeatures": missing_features,
         }
 
+        preliminary_score = 0.0
+        utility_snapshot = {}
         for criterion in criteria:
             criterion_code = criterion["code"]
             feature_name = CRITERION_TO_FEATURE[criterion_code]
             base_score = _clamp_unit(feature_map.get(feature_name) or 0.0)
             criterion_utilities.setdefault(criterion_code, {})[c["laptop_id"]] = base_score
+            utility_snapshot[criterion_code] = base_score
+            preliminary_score += base_score * criterion_weights.get(criterion_code, 0.0)
+
+        candidate_preselection.append({
+            "candidate": c,
+            "preliminary_score": preliminary_score,
+            "utility_snapshot": utility_snapshot,
+        })
+
+    candidate_preselection.sort(key=lambda item: (
+        -float(item["preliminary_score"]),
+        float(item["candidate"]["price"] or 0.0),
+        float(item["candidate"]["weight_kg"] or 999.0),
+        int(item["candidate"]["laptop_id"]),
+    ))
+
+    shortlisted = candidate_preselection[:pairwise_limit]
+    shortlisted_candidates = [item["candidate"] for item in shortlisted]
+    shortlist_meta = {
+        item["candidate"]["laptop_id"]: {
+            "preliminary_score": float(item["preliminary_score"]),
+            "utility_snapshot": item["utility_snapshot"],
+            "shortlist_rank": index + 1,
+        }
+        for index, item in enumerate(shortlisted)
+    }
+
+    if not shortlisted_candidates:
+        raise ValueError("Không có candidate để AI sơ bộ chọn vào nhóm so sánh AHP")
 
     for criterion in criteria:
         criterion_code = criterion["code"]
-        utilities_by_laptop = criterion_utilities.get(criterion_code, {})
+        utilities_by_laptop = {
+            candidate["laptop_id"]: criterion_utilities.get(criterion_code, {}).get(candidate["laptop_id"], 0.0)
+            for candidate in shortlisted_candidates
+        }
         pairwise = _build_alternative_pairwise_matrix(
-            candidate_rows=candidates,
+            candidate_rows=shortlisted_candidates,
             criterion_code=criterion_code,
             utilities_by_laptop=utilities_by_laptop,
         )
 
-        for idx, candidate in enumerate(candidates):
+        for idx, candidate in enumerate(shortlisted_candidates):
             laptop_id = candidate["laptop_id"]
             raw_prediction = utilities_by_laptop.get(laptop_id, 0.0)
             normalized_prediction = pairwise["weights"][idx]
             score_100 = _clamp_score_100(normalized_prediction * 100.0)
+            shortlist_info = shortlist_meta.get(laptop_id, {})
 
             conn.execute(text("""
                 INSERT INTO evaluation_ai_scores (
@@ -945,9 +986,14 @@ def ai_score_candidates(conn, session_id):
                     "criterionCode": criterion_code,
                     "criterionUtility": raw_prediction,
                     "alternativePriority": normalized_prediction,
+                    "aiPreselectionScore": shortlist_info.get("preliminary_score"),
+                    "aiPreselectionRank": shortlist_info.get("shortlist_rank"),
+                    "aiPreselectionUtilities": shortlist_info.get("utility_snapshot"),
+                    "shortlistedFromHardFilterCount": len(candidates),
+                    "shortlistCount": len(shortlisted_candidates),
                     "pairwiseMethod": "ratio_pairwise_from_criterion_utility",
                     "pairwiseSummary": pairwise["summary"],
-                    "candidateCount": len(candidates),
+                    "candidateCount": len(shortlisted_candidates),
                 }),
             })
 
@@ -1202,6 +1248,25 @@ def get_dashboard(conn, session_key):
         ORDER BY row_rc.sort_order, col_rc.sort_order
     """, {"sid": session_row["id"]})
 
+    shortlist_row = _fetch_one(conn, """
+        SELECT COUNT(DISTINCT laptop_id) AS shortlist_count
+        FROM evaluation_ai_scores
+        WHERE evaluation_session_id = :sid
+    """, {"sid": session_row["id"]})
+    shortlist_count = int((shortlist_row or {}).get("shortlist_count") or 0)
+
+    ai_suggestion = None
+    if session_row["hard_filter_pass_count"] and shortlist_count:
+        ai_suggestion = (
+            f"AI sơ bộ đã rút gọn {int(session_row['hard_filter_pass_count'])} laptop vượt qua hard filter "
+            f"còn {shortlist_count} phương án tiêu biểu trước khi lập ma trận AHP phương án."
+        )
+    elif session_row["hard_filter_pass_count"] and not shortlist_count:
+        ai_suggestion = (
+            "Session này chưa có dữ liệu shortlist AI cho bước AHP phương án. "
+            "Hãy chạy lại session mới sau khi cập nhật backend."
+        )
+
     results = _fetch_all(conn, """
         SELECT
             er.id AS evaluation_result_id,
@@ -1266,7 +1331,9 @@ def get_dashboard(conn, session_key):
             "topN": session_row["top_n"],
             "hardFilterTotalCount": session_row["hard_filter_total_count"],
             "hardFilterPassCount": session_row["hard_filter_pass_count"],
+            "aiShortlistCount": shortlist_count,
         },
+        "aiSuggestion": ai_suggestion,
         "inferredPriorities": [
             {
                 "criterion": x["criterion"],
@@ -1684,8 +1751,8 @@ def get_alternative_ahp_by_session_key(conn, session_key):
 
         if hard_filter_pass_count > pairwise_limit:
             message = (
-                f"Session nay co {hard_filter_pass_count} laptop sau hard filter, vuot nguong so sanh cap AHP "
-                f"phuong an ({pairwise_limit}). Hay thu hep bo loc va chay lai de sinh ma tran."
+                f"Session này có {hard_filter_pass_count} laptop sau hard filter nhưng chưa có bước AI shortlist. "
+                f"Sau khi restart backend và chạy lại session mới, hệ thống sẽ tự rút gọn còn tối đa {pairwise_limit} phương án để lập ma trận."
             )
             reason_code = "too_many_candidates"
         elif hard_filter_pass_count == 0:

@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
+import AlternativeMatrices from './pages/AlternativeMatrices';
 
 function App() {
   return (
@@ -10,6 +11,7 @@ function App() {
         <Route path="/" element={<Home />} />
         {/* Đường dẫn hiển thị kết quả dựa trên sessionKey từ Backend */}
         <Route path="/dashboard/:sessionKey" element={<Dashboard />} />
+        <Route path="/dashboard/:sessionKey/alternatives" element={<AlternativeMatrices />} />
       </Routes>
     </Router>
   );
